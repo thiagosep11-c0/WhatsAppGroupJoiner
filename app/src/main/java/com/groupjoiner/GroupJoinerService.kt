@@ -8,9 +8,19 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 class GroupJoinerService : AccessibilityService() {
 
+    companion object {
+        var serviceInstance: GroupJoinerService? = null
+    }
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        serviceInstance = this
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private var lastProcessedTime = 0L
-    private val cooldown = 3000L // evita duplo clique
+    private val cooldown = 5000L
+    private var waitingForGroup = false
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
@@ -20,35 +30,68 @@ class GroupJoinerService : AccessibilityService() {
         // Só age no WhatsApp normal ou Business
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
 
-        // Evita processar múltiplos eventos em sequência
+        // Só processa se o app mandou abrir um link
+        if (!waitingForGroup) return
+
+        // Só age em mudança de janela (nova tela carregada)
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
+
         val now = System.currentTimeMillis()
         if (now - lastProcessedTime < cooldown) return
 
-        // Aguarda a tela carregar completamente
+        // Aguarda a tela carregar
         handler.postDelayed({
             val root = rootInActiveWindow ?: return@postDelayed
-            val joined = tryClickJoinButton(root)
-            root.recycle()
 
-            if (joined) {
-                lastProcessedTime = System.currentTimeMillis()
-                // Volta pro app após 2 segundos
-                handler.postDelayed({
-                    MainActivity.instance?.onGroupProcessed(true)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }, 2000L)
+            // Verifica se é realmente a tela de convite de grupo
+            val isGroupInviteScreen = isGroupInviteScreen(root)
+
+            if (isGroupInviteScreen) {
+                val joined = tryClickJoinButton(root)
+                root.recycle()
+
+                if (joined) {
+                    lastProcessedTime = System.currentTimeMillis()
+                    waitingForGroup = false
+                    handler.postDelayed({
+                        MainActivity.instance?.onGroupProcessed(true)
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                    }, 2000L)
+                } else {
+                    waitingForGroup = false
+                    handler.postDelayed({
+                        MainActivity.instance?.onGroupProcessed(false)
+                        performGlobalAction(GLOBAL_ACTION_BACK)
+                    }, 3000L)
+                }
             } else {
-                // Botão não encontrado = grupo inválido ou já é membro
-                handler.postDelayed({
-                    MainActivity.instance?.onGroupProcessed(false)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }, 3000L)
+                root.recycle()
             }
         }, 2500L)
     }
 
+    private fun isGroupInviteScreen(root: AccessibilityNodeInfo): Boolean {
+        // Verifica se a tela contém textos típicos da tela de convite
+        val inviteTexts = listOf(
+            "entrar no grupo",
+            "join group",
+            "grupo do whatsapp",
+            "whatsapp group",
+            "convidado para",
+            "you've been invited"
+        )
+        for (text in inviteTexts) {
+            val nodes = root.findAccessibilityNodeInfosByText(text)
+            if (nodes.isNotEmpty()) {
+                nodes.forEach { it.recycle() }
+                return true
+            }
+        }
+        return false
+    }
+
     private fun tryClickJoinButton(root: AccessibilityNodeInfo): Boolean {
-        // Textos possíveis do botão em PT e EN
         val targetTexts = listOf(
             "entrar no grupo",
             "join group",
@@ -64,7 +107,6 @@ class GroupJoinerService : AccessibilityService() {
                     node.recycle()
                     return true
                 }
-                // Tenta o pai clicável
                 val parent = node.parent
                 if (parent != null && parent.isClickable) {
                     parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -78,5 +120,14 @@ class GroupJoinerService : AccessibilityService() {
         return false
     }
 
+    fun setWaitingForGroup(waiting: Boolean) {
+        waitingForGroup = waiting
+    }
+
     override fun onInterrupt() {}
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceInstance = null
+    }
 }

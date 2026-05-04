@@ -103,6 +103,9 @@ class MainActivity : AppCompatActivity() {
             tvStatus.text = "🔗 Abrindo ${currentIndex + 1}/${linkList.size}..."
         }
 
+        // Avisa o serviço que estamos esperando a tela de grupo
+        GroupJoinerService.serviceInstance?.setWaitingForGroup(true)
+
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link)).apply {
             setPackage(selectedPackage)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -112,6 +115,7 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         } catch (e: Exception) {
             runOnUiThread { tvStatus.text = "❌ Erro no link ${currentIndex + 1}. Pulando..." }
+            GroupJoinerService.serviceInstance?.setWaitingForGroup(false)
             scheduleNext()
         }
     }
