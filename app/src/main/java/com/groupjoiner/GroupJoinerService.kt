@@ -8,6 +8,11 @@ import android.view.accessibility.AccessibilityNodeInfo
 
 class GroupJoinerService : AccessibilityService() {
 
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastProcessedTime = 0L
+    private val cooldown = 5000L
+    private var waitingForGroup = false
+
     companion object {
         var serviceInstance: GroupJoinerService? = null
     }
@@ -17,69 +22,54 @@ class GroupJoinerService : AccessibilityService() {
         serviceInstance = this
     }
 
-    private val handler = Handler(Looper.getMainLooper())
-    private var lastProcessedTime = 0L
-    private val cooldown = 5000L
-    private var waitingForGroup = false
-
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
 
         val pkg = event.packageName?.toString() ?: return
-
-        // Só age no WhatsApp normal ou Business
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
-
-        // Só processa se o app mandou abrir um link
         if (!waitingForGroup) return
 
-        // Só age em mudança de janela (nova tela carregada)
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
 
         val now = System.currentTimeMillis()
         if (now - lastProcessedTime < cooldown) return
 
-        // Aguarda a tela carregar
+        // Aguarda 3s para a tela carregar completamente
         handler.postDelayed({
             val root = rootInActiveWindow ?: return@postDelayed
 
-            // Verifica se é realmente a tela de convite de grupo
-            val isGroupInviteScreen = isGroupInviteScreen(root)
+            val isInvite = isGroupInviteScreen(root)
 
-            if (isGroupInviteScreen) {
-                val joined = tryClickJoinButton(root)
+            if (isInvite) {
+                val result = tryClickJoinButton(root)
                 root.recycle()
 
-                if (joined) {
-                    lastProcessedTime = System.currentTimeMillis()
-                    waitingForGroup = false
-                    handler.postDelayed({
-                        MainActivity.instance?.onGroupProcessed(true)
-                        performGlobalAction(GLOBAL_ACTION_BACK)
-                    }, 2000L)
-                } else {
-                    waitingForGroup = false
-                    handler.postDelayed({
-                        MainActivity.instance?.onGroupProcessed(false)
-                        performGlobalAction(GLOBAL_ACTION_BACK)
-                    }, 3000L)
-                }
+                lastProcessedTime = System.currentTimeMillis()
+                waitingForGroup = false
+
+                handler.postDelayed({
+                    MainActivity.instance?.onGroupProcessed(result.first, result.second)
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }, 2000L)
             } else {
                 root.recycle()
             }
-        }, 2500L)
+        }, 3000L)
     }
 
     private fun isGroupInviteScreen(root: AccessibilityNodeInfo): Boolean {
-        // Verifica se a tela contém textos típicos da tela de convite
         val inviteTexts = listOf(
             "entrar no grupo",
             "join group",
+            "enviar pedido",
+            "send request",
             "grupo do whatsapp",
             "whatsapp group",
             "convidado para",
-            "you've been invited"
+            "you've been invited",
+            "link de convite",
+            "invite link"
         )
         for (text in inviteTexts) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
@@ -91,33 +81,51 @@ class GroupJoinerService : AccessibilityService() {
         return false
     }
 
-    private fun tryClickJoinButton(root: AccessibilityNodeInfo): Boolean {
-        val targetTexts = listOf(
-            "entrar no grupo",
-            "join group",
-            "entrar",
-            "join"
-        )
-
-        for (text in targetTexts) {
+    // Retorna Pair(clicou, tipo: "joined" | "requested" | "not_found")
+    private fun tryClickJoinButton(root: AccessibilityNodeInfo): Pair<Boolean, String> {
+        // Botões de entrar diretamente
+        val joinTexts = listOf("entrar no grupo", "join group", "entrar", "join")
+        for (text in joinTexts) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
                 if (node.isClickable) {
                     node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     node.recycle()
-                    return true
+                    return Pair(true, "joined")
                 }
                 val parent = node.parent
                 if (parent != null && parent.isClickable) {
                     parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                     parent.recycle()
                     node.recycle()
-                    return true
+                    return Pair(true, "joined")
                 }
                 node.recycle()
             }
         }
-        return false
+
+        // Botões de enviar pedido (grupo fechado)
+        val requestTexts = listOf("enviar pedido", "send request", "solicitar", "request")
+        for (text in requestTexts) {
+            val nodes = root.findAccessibilityNodeInfosByText(text)
+            for (node in nodes) {
+                if (node.isClickable) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    node.recycle()
+                    return Pair(true, "requested")
+                }
+                val parent = node.parent
+                if (parent != null && parent.isClickable) {
+                    parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    parent.recycle()
+                    node.recycle()
+                    return Pair(true, "requested")
+                }
+                node.recycle()
+            }
+        }
+
+        return Pair(false, "not_found")
     }
 
     fun setWaitingForGroup(waiting: Boolean) {

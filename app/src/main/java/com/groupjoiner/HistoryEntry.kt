@@ -6,7 +6,7 @@ import java.util.*
 data class HistoryEntry(
     val number: Int,
     val link: String,
-    val status: String, // "success", "invalid", "error"
+    val status: String, // "joined", "requested", "invalid", "error"
     val timestamp: Long = System.currentTimeMillis()
 ) {
     val timeFormatted: String
@@ -17,27 +17,23 @@ data class HistoryEntry(
 
     val statusIcon: String
         get() = when (status) {
-            "success" -> "✅"
-            "invalid" -> "⚠️"
-            else -> "❌"
+            "joined"    -> "✅"
+            "requested" -> "📨"
+            "invalid"   -> "⚠️"
+            else        -> "❌"
         }
 
     val statusText: String
         get() = when (status) {
-            "success" -> "Entrou no grupo"
-            "invalid" -> "Inválido ou já membro"
-            else -> "Erro ao abrir"
+            "joined"    -> "Entrou no grupo"
+            "requested" -> "Pedido enviado"
+            "invalid"   -> "Inválido ou já membro"
+            else        -> "Erro ao abrir"
         }
 }
 
 object HistoryManager {
     val entries = mutableListOf<HistoryEntry>()
-
-    fun add(entry: HistoryEntry) {
-        entries.add(0, entry) // mais recente primeiro
-    }
-
-    fun clear() {
-        entries.clear()
-    }
+    fun add(entry: HistoryEntry) { entries.add(0, entry) }
+    fun clear() { entries.clear() }
 }

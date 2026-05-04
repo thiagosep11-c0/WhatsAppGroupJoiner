@@ -279,9 +279,10 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateHistoryCount() {
         val total = HistoryManager.entries.size
-        val success = HistoryManager.entries.count { it.status == "success" }
-        val invalid = HistoryManager.entries.count { it.status == "invalid" }
-        tvHistoryCount.text = "$total entradas  ✅$success  ⚠️$invalid"
+        val joined = HistoryManager.entries.count { it.status == "joined" }
+        val requested = HistoryManager.entries.count { it.status == "requested" }
+        val invalid = HistoryManager.entries.count { it.status == "invalid" || it.status == "error" }
+        tvHistoryCount.text = "$total entradas  ✅$joined  📨$requested  ⚠️$invalid"
     }
 
     private fun isAccessibilityEnabled(): Boolean {
@@ -338,16 +339,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun onGroupProcessed(success: Boolean) {
+    fun onGroupProcessed(clicked: Boolean, type: String) {
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
-        val status = if (success) "success" else "invalid"
-        if (!success) failedLinks.add(Pair(currentIndex, link))
+        val status = when {
+            clicked && type == "joined"    -> "joined"
+            clicked && type == "requested" -> "requested"
+            else -> "invalid"
+        }
+        if (!clicked) failedLinks.add(Pair(currentIndex, link))
         addToHistory(link, status)
 
-        val msg = if (success)
-            "✅ Entrou no grupo ${currentIndex + 1}/${linkList.size}"
-        else
-            "⚠️ Grupo ${currentIndex + 1} inválido ou já é membro"
+        val msg = when (status) {
+            "joined"    -> "✅ Entrou no grupo ${currentIndex + 1}/${linkList.size}"
+            "requested" -> "📨 Pedido enviado grupo ${currentIndex + 1}/${linkList.size}"
+            else         -> "⚠️ Grupo ${currentIndex + 1} inválido ou já é membro"
+        }
 
         runOnUiThread { tvStatus.text = msg }
         scheduleNext()
