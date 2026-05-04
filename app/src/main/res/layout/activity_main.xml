@@ -86,21 +86,11 @@
     <ScrollView android:id="@+id/pageSettings" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="16dp" android:visibility="gone">
         <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⏱ Intervalos entre grupos (segundos)" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="8dp"/>
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="16dp">
-                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginEnd="6dp">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="1º intervalo" android:textSize="12sp" android:textColor="#666"/>
-                    <EditText android:id="@+id/etInterval1" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="30" android:background="@drawable/edittext_border" android:padding="8dp"/>
-                </LinearLayout>
-                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginEnd="6dp">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="2º intervalo" android:textSize="12sp" android:textColor="#666"/>
-                    <EditText android:id="@+id/etInterval2" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="2" android:background="@drawable/edittext_border" android:padding="8dp"/>
-                </LinearLayout>
-                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
-                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="3º intervalo" android:textSize="12sp" android:textColor="#666"/>
-                    <EditText android:id="@+id/etInterval3" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="60" android:background="@drawable/edittext_border" android:padding="8dp"/>
-                </LinearLayout>
-            </LinearLayout>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⏱ Padrão de intervalos" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Grupo 1 → 5s → Grupo 2 → 30s → Grupo 3 → 40s → Grupo 4 → 50s → Grupo 5 → 60s → repete" android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5" android:padding="10dp" android:layout_marginBottom="16dp"/>
+            <EditText android:id="@+id/etInterval1" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+            <EditText android:id="@+id/etInterval2" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+            <EditText android:id="@+id/etInterval3" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
 
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="🔢 Máximo de grupos por sessão (0 = sem limite)" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="8dp"/>
             <EditText android:id="@+id/etMaxGroups" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="0" android:background="@drawable/edittext_border" android:padding="10dp" android:layout_marginBottom="20dp"/>

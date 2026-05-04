@@ -63,10 +63,9 @@ class MainActivity : AppCompatActivity() {
     private var isPaused = false
     private var isRunning = false
 
-    private var interval1 = 30_000L
-    private var interval2 = 2_000L
-    private var interval3 = 60_000L
     private var maxGroups = 0
+    // Intervalos: 5s, 30s, 40s, 50s, 60s, repetindo
+    private val defaultIntervals = listOf(5_000L, 30_000L, 40_000L, 50_000L, 60_000L)
 
     companion object {
         var instance: MainActivity? = null
@@ -192,9 +191,6 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        interval1 = (etInterval1.text.toString().toLongOrNull() ?: 30) * 1000L
-        interval2 = (etInterval2.text.toString().toLongOrNull() ?: 2) * 1000L
-        interval3 = (etInterval3.text.toString().toLongOrNull() ?: 60) * 1000L
         maxGroups = etMaxGroups.text.toString().toIntOrNull() ?: 0
         selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
 
@@ -312,8 +308,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleNext() {
-        val intervals = listOf(interval1, interval2, interval3)
-        val delay = intervals[currentIndex % intervals.size]
+        val delay = defaultIntervals[currentIndex % defaultIntervals.size]
         val nextIdx = currentIndex + 1
         currentIndex++
 
