@@ -19,6 +19,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Baixar Gradle Wrapper
+        run: |
+          curl -L "https://services.gradle.org/distributions/gradle-8.2-bin.zip" -o /tmp/gradle.zip
+          unzip -q /tmp/gradle.zip -d /tmp/gradle
+          /tmp/gradle/gradle-8.2/bin/gradle wrapper --gradle-version 8.2 --project-dir .
+
       - name: Permissão ao gradlew
         run: chmod +x gradlew
 
