@@ -6,7 +6,7 @@ import java.util.*
 data class HistoryEntry(
     val number: Int,
     val link: String,
-    val status: String, // "joined", "requested", "invalid", "error"
+    val status: String,
     val timestamp: Long = System.currentTimeMillis()
 ) {
     val timeFormatted: String
@@ -17,18 +17,20 @@ data class HistoryEntry(
 
     val statusIcon: String
         get() = when (status) {
-            "joined"    -> "✅"
-            "requested" -> "⏳"
-            "invalid"   -> "⚠️"
-            else        -> "❌"
+            "joined"         -> "✅"
+            "requested"      -> "⏳"
+            "pending"        -> "🔒"
+            "already_member" -> "👥"
+            else             -> "❌"
         }
 
     val statusText: String
         get() = when (status) {
-            "joined"    -> "Entrou no grupo"
-            "requested" -> "Aguardando pedido"
-            "invalid"   -> "Inválido ou já membro"
-            else        -> "Erro ao abrir"
+            "joined"         -> "Entrou no grupo"
+            "requested"      -> "Pedido enviado"
+            "pending"        -> "Aguardando liberação"
+            "already_member" -> "Já é membro"
+            else             -> "Inválido / Erro"
         }
 }
 

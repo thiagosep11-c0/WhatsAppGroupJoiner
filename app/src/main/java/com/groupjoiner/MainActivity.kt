@@ -247,7 +247,7 @@ class MainActivity : AppCompatActivity() {
                 btnPause.visibility = View.GONE
                 if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
                 isRunning = false
-                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested, failed)
+                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pending, failed)
             }
             return
         }
@@ -284,14 +284,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun onGroupProcessed(clicked: Boolean, type: String) {
+    fun onGroupProcessed(status: String) {
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
-        val status = when {
-            clicked && type == "joined"    -> "joined"
-            clicked && type == "requested" -> "requested"
-            else -> "invalid"
-        }
-        if (!clicked) failedLinks.add(Pair(currentIndex, link))
+        val failed = status == "invalid"
+        if (failed) failedLinks.add(Pair(currentIndex, link))
         updateLinkStatus(currentIndex, status)
         addToHistory(link, status)
         scheduleNext()
@@ -365,8 +361,9 @@ class MainActivity : AppCompatActivity() {
         val total = HistoryManager.entries.size
         val joined = HistoryManager.entries.count { it.status == "joined" }
         val requested = HistoryManager.entries.count { it.status == "requested" }
-        val invalid = HistoryManager.entries.count { it.status == "invalid" || it.status == "error" }
-        tvHistoryCount.text = "$total entradas  ✅$joined  ⏳$requested  ⚠️$invalid"
+        val pending = HistoryManager.entries.count { it.status == "pending" }
+        val invalid = HistoryManager.entries.count { it.status == "invalid" }
+        tvHistoryCount.text = "$total  ✅$joined  ⏳$requested  🔒$pending  ❌$invalid"
     }
 
     private fun showTab(tab: String) {

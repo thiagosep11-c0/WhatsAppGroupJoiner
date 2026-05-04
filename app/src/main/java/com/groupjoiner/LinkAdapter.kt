@@ -10,7 +10,7 @@ import androidx.recyclerview.widget.RecyclerView
 data class LinkItem(
     val number: Int,
     val url: String,
-    var status: String = "pending", // pending, current, joined, requested, invalid, error
+    var status: String = "pending",
     var countdown: String = ""
 )
 
@@ -36,7 +36,7 @@ class LinkAdapter(private val items: MutableList<LinkItem>) :
 
         when (item.status) {
             "current" -> {
-                h.tvStatus.text = if (item.countdown.isNotEmpty()) "⏳ ${item.countdown}" else "🔗 Abrindo..."
+                h.tvStatus.text = if (item.countdown.isNotEmpty()) "⏱ ${item.countdown}" else "🔗 Abrindo..."
                 h.tvStatus.setTextColor(Color.parseColor("#FF9800"))
                 h.itemView.setBackgroundColor(Color.parseColor("#FFF8E1"))
             }
@@ -46,22 +46,27 @@ class LinkAdapter(private val items: MutableList<LinkItem>) :
                 h.itemView.setBackgroundColor(Color.parseColor("#E8F5E9"))
             }
             "requested" -> {
-                h.tvStatus.text = "⏳ Aguard."
+                h.tvStatus.text = "⏳ Pedido enviado"
                 h.tvStatus.setTextColor(Color.parseColor("#1565C0"))
                 h.itemView.setBackgroundColor(Color.parseColor("#E3F2FD"))
             }
-            "invalid" -> {
-                h.tvStatus.text = "⚠️ Inválido"
-                h.tvStatus.setTextColor(Color.parseColor("#F57F17"))
-                h.itemView.setBackgroundColor(Color.parseColor("#FFF9C4"))
+            "pending" -> {
+                h.tvStatus.text = "🔒 Aguard. liberação"
+                h.tvStatus.setTextColor(Color.parseColor("#6A1B9A"))
+                h.itemView.setBackgroundColor(Color.parseColor("#F3E5F5"))
             }
-            "error" -> {
-                h.tvStatus.text = "❌ Erro"
-                h.tvStatus.setTextColor(Color.RED)
+            "already_member" -> {
+                h.tvStatus.text = "👥 Já é membro"
+                h.tvStatus.setTextColor(Color.parseColor("#00695C"))
+                h.itemView.setBackgroundColor(Color.parseColor("#E0F2F1"))
+            }
+            "invalid" -> {
+                h.tvStatus.text = "❌ Inválido"
+                h.tvStatus.setTextColor(Color.parseColor("#B71C1C"))
                 h.itemView.setBackgroundColor(Color.parseColor("#FFEBEE"))
             }
             else -> {
-                h.tvStatus.text = "⬜ Pendente"
+                h.tvStatus.text = if (item.countdown.isNotEmpty()) "⏱ ${item.countdown}" else "⬜ Pendente"
                 h.tvStatus.setTextColor(Color.parseColor("#AAAAAA"))
                 h.itemView.setBackgroundColor(Color.WHITE)
             }
