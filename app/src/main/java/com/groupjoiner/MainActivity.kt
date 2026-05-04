@@ -238,7 +238,8 @@ class MainActivity : AppCompatActivity() {
         if (currentIndex >= linkList.size) {
             val joined = linkItems.count { it.status == "joined" }
             val requested = linkItems.count { it.status == "requested" }
-            val failed = linkItems.count { it.status == "invalid" || it.status == "error" }
+            val pendingC = linkItems.count { it.status == "pending" }
+            val failed = linkItems.count { it.status == "invalid" }
             runOnUiThread {
                 tvCountdown.text = "✅ Concluído!"
                 tvProgress.text = "${linkList.size}/${linkList.size}"
@@ -247,7 +248,7 @@ class MainActivity : AppCompatActivity() {
                 btnPause.visibility = View.GONE
                 if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
                 isRunning = false
-                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingCount, failed)
+                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
             return
         }
