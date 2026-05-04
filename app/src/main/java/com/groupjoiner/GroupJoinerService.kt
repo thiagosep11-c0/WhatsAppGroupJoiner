@@ -48,12 +48,24 @@ class GroupJoinerService : AccessibilityService() {
                 lastProcessedTime = System.currentTimeMillis()
                 waitingForGroup = false
 
+                // Volta pro app imediatamente depois da ação
+                handler.postDelayed({
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }, 1000L)
+
                 handler.postDelayed({
                     MainActivity.instance?.onGroupProcessed(result.first, result.second)
-                    performGlobalAction(GLOBAL_ACTION_BACK)
-                }, 2000L)
+                }, 1500L)
             } else {
                 root.recycle()
+                // Tela não era de convite — volta pro app e marca como inválido
+                waitingForGroup = false
+                handler.postDelayed({
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }, 1000L)
+                handler.postDelayed({
+                    MainActivity.instance?.onGroupProcessed(false, "invalid")
+                }, 1500L)
             }
         }, 3000L)
     }

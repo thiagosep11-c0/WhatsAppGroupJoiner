@@ -376,16 +376,22 @@ class MainActivity : AppCompatActivity() {
             progressBar.progress = currentIndex
             tvProgress.text = "${currentIndex}/${linkList.size}"
         }
-        startCountdown(delay)
-        handler.postDelayed({ openNextLink() }, delay)
+        // Timer no app — só abre WhatsApp quando zerar
+        startCountdown(delay) {
+            openNextLink()
+        }
     }
 
-    private fun startCountdown(totalMs: Long) {
+    private fun startCountdown(totalMs: Long, onFinish: (() -> Unit)? = null) {
         countdownRunnable?.let { handler.removeCallbacks(it) }
         val startTime = System.currentTimeMillis()
         fun tick() {
             val remaining = totalMs - (System.currentTimeMillis() - startTime)
-            if (remaining <= 0) { runOnUiThread { tvCountdown.text = "" }; return }
+            if (remaining <= 0) {
+                runOnUiThread { tvCountdown.text = "" }
+                onFinish?.invoke()
+                return
+            }
             val secs = (remaining / 1000).toInt()
             val timeStr = if (secs >= 60) String.format("%d:%02d", secs / 60, secs % 60) else "${secs}s"
             runOnUiThread { tvCountdown.text = "⏱ Próximo grupo em: $timeStr" }
