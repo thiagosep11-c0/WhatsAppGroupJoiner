@@ -247,7 +247,7 @@ class MainActivity : AppCompatActivity() {
                 btnPause.visibility = View.GONE
                 if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
                 isRunning = false
-                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pending, failed)
+                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingCount, failed)
             }
             return
         }
