@@ -11,7 +11,6 @@
         android:orientation="vertical"
         android:gravity="center_horizontal">
 
-        <!-- Título -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
@@ -30,7 +29,6 @@
             android:textColor="#666666"
             android:layout_marginBottom="20dp"/>
 
-        <!-- Escolha do WhatsApp -->
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -65,12 +63,11 @@
                 android:textColor="#333333"/>
         </RadioGroup>
 
-        <!-- Campo de links -->
         <EditText
             android:id="@+id/editTextLinks"
             android:layout_width="match_parent"
             android:layout_height="200dp"
-            android:hint="https://chat.whatsapp.com/XXXX&#10;https://chat.whatsapp.com/YYYY&#10;https://chat.whatsapp.com/ZZZZ"
+            android:hint="1 - https://chat.whatsapp.com/XXXX&#10;2 - https://chat.whatsapp.com/YYYY&#10;3 - https://chat.whatsapp.com/ZZZZ"
             android:gravity="top"
             android:inputType="textMultiLine"
             android:background="@drawable/edittext_border"
@@ -78,7 +75,6 @@
             android:textSize="13sp"
             android:layout_marginBottom="16dp"/>
 
-        <!-- Botão de permissão -->
         <Button
             android:id="@+id/btnPermission"
             android:layout_width="match_parent"
@@ -88,7 +84,6 @@
             android:textColor="#FFFFFF"
             android:layout_marginBottom="10dp"/>
 
-        <!-- Botão iniciar -->
         <Button
             android:id="@+id/btnStart"
             android:layout_width="match_parent"
@@ -97,7 +92,19 @@
             android:backgroundTint="#075E54"
             android:textColor="#FFFFFF"
             android:textSize="16sp"
-            android:layout_marginBottom="20dp"/>
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Countdown regressivo -->
+        <TextView
+            android:id="@+id/tvCountdown"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#075E54"
+            android:gravity="center"
+            android:layout_marginBottom="8dp"/>
 
         <!-- Status -->
         <TextView
