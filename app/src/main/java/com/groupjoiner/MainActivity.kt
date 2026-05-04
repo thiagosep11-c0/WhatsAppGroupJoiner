@@ -64,8 +64,13 @@ class MainActivity : AppCompatActivity() {
             selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
 
             val raw = editTextLinks.text.toString().trim()
+
+            // Aceita formatos: "1 - https://...", "1. https://...", "1) https://...", ou só "https://..."
+            val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
+
             linkList = raw.split("\n")
                 .map { it.trim() }
+                .map { line -> prefixRegex.replace(line, "").trim() }
                 .filter { it.startsWith("http") }
                 .toMutableList()
 
@@ -76,7 +81,7 @@ class MainActivity : AppCompatActivity() {
 
             currentIndex = 0
             btnStart.isEnabled = false
-            tvStatus.text = "Iniciando..."
+            tvStatus.text = "Iniciando... ${linkList.size} links encontrados"
             openNextLink()
         }
     }
