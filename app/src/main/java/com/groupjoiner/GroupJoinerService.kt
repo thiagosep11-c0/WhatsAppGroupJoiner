@@ -14,6 +14,7 @@ class GroupJoinerService : AccessibilityService() {
     private val cooldown = 8000L
     private var waitingForGroup = false
     private var timeoutRunnable: Runnable? = null
+    private var alreadyActed = false
 
     companion object {
         var serviceInstance: GroupJoinerService? = null
@@ -29,78 +30,114 @@ class GroupJoinerService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
         if (!waitingForGroup) return
+        if (alreadyActed) return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
 
         val now = System.currentTimeMillis()
         if (now - lastProcessedTime < cooldown) return
 
-        // Cancela timeout anterior
         timeoutRunnable?.let { handler.removeCallbacks(it) }
 
-        // Aguarda 4s para tela carregar completamente
         handler.postDelayed({
-            if (!waitingForGroup) return@postDelayed
-            val root = rootInActiveWindow ?: run {
-                handleResult(false, "invalid")
-                return@postDelayed
-            }
-
-            if (isGroupInviteScreen(root)) {
-                val result = tryClickJoinButton(root)
-                root.recycle()
-                handleResult(result.first, result.second)
-            } else {
-                root.recycle()
-                // Tenta mais uma vez após 2s (tela pode ainda estar carregando)
-                handler.postDelayed({
-                    val root2 = rootInActiveWindow ?: run { handleResult(false, "invalid"); return@postDelayed }
-                    if (isGroupInviteScreen(root2)) {
-                        val result = tryClickJoinButton(root2)
-                        root2.recycle()
-                        handleResult(result.first, result.second)
-                    } else {
-                        root2.recycle()
-                        handleResult(false, "invalid")
-                    }
-                }, 2000L)
-            }
+            if (!waitingForGroup || alreadyActed) return@postDelayed
+            tryActOnScreen()
         }, 4000L)
     }
 
-    private fun handleResult(clicked: Boolean, type: String) {
-        lastProcessedTime = System.currentTimeMillis()
-        waitingForGroup = false
-        timeoutRunnable?.let { handler.removeCallbacks(it) }
+    private fun tryActOnScreen(attempt: Int = 1) {
+        val root = rootInActiveWindow ?: run {
+            closeAndReport(false, "invalid")
+            return
+        }
 
-        // Volta pro app
-        handler.postDelayed({
-            try {
-                val appIntent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
-                appIntent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-                appIntent?.let { startActivity(it) }
-            } catch (e: Exception) { }
+        val result = tryClickJoinButton(root)
+        root.recycle()
 
-            handler.postDelayed({
-                MainActivity.instance?.onGroupProcessed(clicked, type)
-            }, 500L)
-        }, 1000L)
+        when (result.second) {
+            "joined", "requested" -> {
+                // Clicou com sucesso — fecha tela e volta pro app
+                alreadyActed = true
+                handler.postDelayed({
+                    closeWhatsAppScreen()
+                    handler.postDelayed({ returnToApp(result.first, result.second) }, 800L)
+                }, 1000L)
+            }
+            "already_member" -> {
+                // Já é membro — fecha e segue
+                alreadyActed = true
+                closeWhatsAppScreen()
+                handler.postDelayed({ returnToApp(false, "invalid") }, 800L)
+            }
+            else -> {
+                if (attempt < 3) {
+                    // Tenta mais uma vez após 2s
+                    handler.postDelayed({ tryActOnScreen(attempt + 1) }, 2000L)
+                } else {
+                    // Nenhum botão encontrado — fecha com X e marca como inválido
+                    alreadyActed = true
+                    closeWhatsAppScreen()
+                    handler.postDelayed({ returnToApp(false, "invalid") }, 800L)
+                }
+            }
+        }
     }
 
-    private fun isGroupInviteScreen(root: AccessibilityNodeInfo): Boolean {
-        val texts = listOf(
-            "entrar no grupo", "join group", "enviar pedido", "send request",
-            "grupo do whatsapp", "whatsapp group", "convidado para",
-            "you've been invited", "link de convite", "invite link"
-        )
-        for (text in texts) {
-            val nodes = root.findAccessibilityNodeInfosByText(text)
-            if (nodes.isNotEmpty()) { nodes.forEach { it.recycle() }; return true }
+    private fun closeWhatsAppScreen() {
+        // Tenta fechar pelo botão X primeiro
+        val root = rootInActiveWindow
+        if (root != null) {
+            val closeTexts = listOf("fechar", "close", "cancelar", "cancel")
+            for (text in closeTexts) {
+                val nodes = root.findAccessibilityNodeInfosByText(text)
+                for (node in nodes) {
+                    if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); node.recycle(); root.recycle(); return }
+                    node.recycle()
+                }
+            }
+            // Procura botão de fechar por content description
+            val closeDescs = listOf("fechar", "close", "back", "voltar")
+            for (desc in closeDescs) {
+                val nodes = root.findAccessibilityNodeInfosByContentDescription(desc)
+                for (node in nodes) {
+                    if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); node.recycle(); root.recycle(); return }
+                    node.recycle()
+                }
+            }
+            root.recycle()
         }
-        return false
+        // Se não encontrou botão X, usa o back do sistema
+        performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    private fun returnToApp(clicked: Boolean, type: String) {
+        try {
+            val appIntent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
+            appIntent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            appIntent?.let { startActivity(it) }
+        } catch (e: Exception) { }
+
+        handler.postDelayed({
+            MainActivity.instance?.onGroupProcessed(clicked, type)
+        }, 600L)
+    }
+
+    private fun closeAndReport(clicked: Boolean, type: String) {
+        alreadyActed = true
+        closeWhatsAppScreen()
+        handler.postDelayed({ returnToApp(clicked, type) }, 800L)
     }
 
     private fun tryClickJoinButton(root: AccessibilityNodeInfo): Pair<Boolean, String> {
+        // Verificar se já é membro
+        val memberTexts = listOf("você já é membro", "you're already a member", "já participa", "already a participant")
+        for (text in memberTexts) {
+            if (root.findAccessibilityNodeInfosByText(text).isNotEmpty()) {
+                return Pair(false, "already_member")
+            }
+        }
+
+        // Botão Entrar
         for (text in listOf("entrar no grupo", "join group", "entrar", "join")) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
@@ -110,7 +147,9 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
-        for (text in listOf("enviar pedido", "send request", "solicitar", "request")) {
+
+        // Botão Enviar Pedido
+        for (text in listOf("enviar pedido", "send request", "solicitar", "request to join")) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
                 if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); node.recycle(); return Pair(true, "requested") }
@@ -119,19 +158,20 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
+
         return Pair(false, "not_found")
     }
 
     fun setWaiting(waiting: Boolean) {
         waitingForGroup = waiting
+        alreadyActed = false
         if (waiting) {
-            // Timeout de 15s — se não detectar nada, marca como inválido e volta
             timeoutRunnable = Runnable {
-                if (waitingForGroup) {
-                    handleResult(false, "invalid")
+                if (waitingForGroup && !alreadyActed) {
+                    closeAndReport(false, "invalid")
                 }
             }
-            handler.postDelayed(timeoutRunnable!!, 15_000L)
+            handler.postDelayed(timeoutRunnable!!, 18_000L)
         } else {
             timeoutRunnable?.let { handler.removeCallbacks(it) }
         }
