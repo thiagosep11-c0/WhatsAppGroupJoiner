@@ -351,7 +351,7 @@ class MainActivity : AppCompatActivity() {
 
         val msg = when (status) {
             "joined"    -> "✅ Entrou no grupo ${currentIndex + 1}/${linkList.size}"
-            "requested" -> "📨 Pedido enviado grupo ${currentIndex + 1}/${linkList.size}"
+            "requested" -> "⏳ Grupo ${currentIndex + 1} — Não entrou, aguardando aprovação do admin"
             else         -> "⚠️ Grupo ${currentIndex + 1} inválido ou já é membro"
         }
 

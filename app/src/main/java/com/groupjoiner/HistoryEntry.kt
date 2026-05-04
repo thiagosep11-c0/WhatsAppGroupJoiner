@@ -18,7 +18,7 @@ data class HistoryEntry(
     val statusIcon: String
         get() = when (status) {
             "joined"    -> "✅"
-            "requested" -> "📨"
+            "requested" -> "⏳"
             "invalid"   -> "⚠️"
             else        -> "❌"
         }
@@ -26,7 +26,7 @@ data class HistoryEntry(
     val statusText: String
         get() = when (status) {
             "joined"    -> "Entrou no grupo"
-            "requested" -> "Pedido enviado"
+            "requested" -> "Aguardando pedido"
             "invalid"   -> "Inválido ou já membro"
             else        -> "Erro ao abrir"
         }
