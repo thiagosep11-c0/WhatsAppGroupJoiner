@@ -271,7 +271,7 @@ class MainActivity : AppCompatActivity() {
             tvCountdown.text = "🔗 Abrindo..."
         }
 
-        GroupJoinerService.serviceInstance?.setWaitingForGroup(true)
+        GroupJoinerService.serviceInstance?.setWaiting(true)
 
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link)).apply {
             setPackage(selectedPackage)
@@ -283,7 +283,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             updateLinkStatus(currentIndex, "error")
             failedLinks.add(Pair(currentIndex, link))
-            GroupJoinerService.serviceInstance?.setWaitingForGroup(false)
+            GroupJoinerService.serviceInstance?.setWaiting(false)
             scheduleNext()
         }
     }

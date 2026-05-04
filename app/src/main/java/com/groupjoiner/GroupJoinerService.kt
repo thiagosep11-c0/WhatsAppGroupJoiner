@@ -12,7 +12,7 @@ class GroupJoinerService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastProcessedTime = 0L
     private val cooldown = 5000L
-    var waitingForGroup = false
+    private var waitingForGroup = false
 
     companion object {
         var serviceInstance: GroupJoinerService? = null
@@ -44,7 +44,6 @@ class GroupJoinerService : AccessibilityService() {
                 waitingForGroup = false
 
                 handler.postDelayed({
-                    // Volta pro app especificamente
                     val appIntent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
                     appIntent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
                     appIntent?.let { startActivity(it) }
@@ -65,7 +64,8 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun isGroupInviteScreen(root: AccessibilityNodeInfo): Boolean {
-        val texts = listOf("entrar no grupo","join group","enviar pedido","send request","grupo do whatsapp","whatsapp group","convidado para","you've been invited","link de convite","invite link")
+        val texts = listOf("entrar no grupo","join group","enviar pedido","send request",
+            "grupo do whatsapp","whatsapp group","convidado para","you've been invited")
         for (text in texts) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             if (nodes.isNotEmpty()) { nodes.forEach { it.recycle() }; return true }
@@ -93,7 +93,14 @@ class GroupJoinerService : AccessibilityService() {
         return Pair(false, "not_found")
     }
 
-    fun setWaitingForGroup(waiting: Boolean) { waitingForGroup = waiting }
+    fun setWaiting(waiting: Boolean) {
+        waitingForGroup = waiting
+    }
+
     override fun onInterrupt() {}
-    override fun onDestroy() { super.onDestroy(); serviceInstance = null }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceInstance = null
+    }
 }
