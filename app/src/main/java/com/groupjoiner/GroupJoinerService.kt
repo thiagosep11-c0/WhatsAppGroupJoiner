@@ -95,14 +95,13 @@ class GroupJoinerService : AccessibilityService() {
                     node.recycle()
                 }
             }
-            // Procura botão de fechar por content description
-            val closeDescs = listOf("fechar", "close", "back", "voltar")
-            for (desc in closeDescs) {
-                val nodes = root.findAccessibilityNodeInfosByContentDescription(desc)
-                for (node in nodes) {
-                    if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); node.recycle(); root.recycle(); return }
-                    node.recycle()
-                }
+            // Procura botão de fechar percorrendo a árvore
+            val closeNode = findClickableByDesc(root, listOf("fechar", "close", "back", "voltar", "x"))
+            if (closeNode != null) {
+                closeNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                closeNode.recycle()
+                root.recycle()
+                return
             }
             root.recycle()
         }
@@ -175,6 +174,21 @@ class GroupJoinerService : AccessibilityService() {
         } else {
             timeoutRunnable?.let { handler.removeCallbacks(it) }
         }
+    }
+
+    private fun findClickableByDesc(node: AccessibilityNodeInfo, descs: List<String>): AccessibilityNodeInfo? {
+        val cd = node.contentDescription?.toString()?.lowercase() ?: ""
+        val txt = node.text?.toString()?.lowercase() ?: ""
+        if (node.isClickable && descs.any { cd.contains(it) || txt.contains(it) }) {
+            return node
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            val found = findClickableByDesc(child, descs)
+            if (found != null) { child.recycle(); return found }
+            child.recycle()
+        }
+        return null
     }
 
     override fun onInterrupt() {}
