@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    android:background="#FFFFFF">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal">
+
+        <!-- Título -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="WhatsApp Group Joiner"
+            android:textSize="22sp"
+            android:textStyle="bold"
+            android:textColor="#075E54"
+            android:layout_marginTop="24dp"
+            android:layout_marginBottom="4dp"/>
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Cole os links abaixo, um por linha"
+            android:textSize="14sp"
+            android:textColor="#666666"
+            android:layout_marginBottom="20dp"/>
+
+        <!-- Escolha do WhatsApp -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Qual WhatsApp usar?"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:textColor="#333333"
+            android:layout_marginBottom="8dp"/>
+
+        <RadioGroup
+            android:id="@+id/radioGroup"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:layout_marginBottom="20dp">
+
+            <RadioButton
+                android:id="@+id/radioNormal"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="WhatsApp"
+                android:checked="true"
+                android:textColor="#333333"/>
+
+            <RadioButton
+                android:id="@+id/radioBusiness"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="WhatsApp Business"
+                android:textColor="#333333"/>
+        </RadioGroup>
+
+        <!-- Campo de links -->
+        <EditText
+            android:id="@+id/editTextLinks"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:hint="https://chat.whatsapp.com/XXXX&#10;https://chat.whatsapp.com/YYYY&#10;https://chat.whatsapp.com/ZZZZ"
+            android:gravity="top"
+            android:inputType="textMultiLine"
+            android:background="@drawable/edittext_border"
+            android:padding="12dp"
+            android:textSize="13sp"
+            android:layout_marginBottom="16dp"/>
+
+        <!-- Botão de permissão -->
+        <Button
+            android:id="@+id/btnPermission"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:text="1. Ativar Acessibilidade"
+            android:backgroundTint="#FF9800"
+            android:textColor="#FFFFFF"
+            android:layout_marginBottom="10dp"/>
+
+        <!-- Botão iniciar -->
+        <Button
+            android:id="@+id/btnStart"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="2. Iniciar"
+            android:backgroundTint="#075E54"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:layout_marginBottom="20dp"/>
+
+        <!-- Status -->
+        <TextView
+            android:id="@+id/tvStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Aguardando..."
+            android:textSize="13sp"
+            android:textColor="#444444"
+            android:background="#F5F5F5"
+            android:padding="12dp"
+            android:minHeight="80dp"/>
+
+    </LinearLayout>
+</ScrollView>
