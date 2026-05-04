@@ -13,8 +13,8 @@ class GroupJoinerService : AccessibilityService() {
     private var lastProcessedTime = 0L
     private val cooldown = 8000L
     private var waitingForGroup = false
-    private var timeoutRunnable: Runnable? = null
     private var alreadyActed = false
+    private var timeoutRunnable: Runnable? = null
 
     companion object {
         var serviceInstance: GroupJoinerService? = null
@@ -29,8 +29,7 @@ class GroupJoinerService : AccessibilityService() {
         event ?: return
         val pkg = event.packageName?.toString() ?: return
         if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return
-        if (!waitingForGroup) return
-        if (alreadyActed) return
+        if (!waitingForGroup || alreadyActed) return
         if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
 
@@ -39,15 +38,16 @@ class GroupJoinerService : AccessibilityService() {
 
         timeoutRunnable?.let { handler.removeCallbacks(it) }
 
+        // Aguarda 4s para tela carregar
         handler.postDelayed({
             if (!waitingForGroup || alreadyActed) return@postDelayed
-            tryActOnScreen()
+            tryActOnScreen(1)
         }, 4000L)
     }
 
-    private fun tryActOnScreen(attempt: Int = 1) {
+    private fun tryActOnScreen(attempt: Int) {
         val root = rootInActiveWindow ?: run {
-            closeAndReport(false, "invalid")
+            finishGroup(false, "invalid")
             return
         }
 
@@ -56,60 +56,38 @@ class GroupJoinerService : AccessibilityService() {
 
         when (result.second) {
             "joined", "requested" -> {
-                // Clicou com sucesso — fecha tela e volta pro app
                 alreadyActed = true
+                // 1. Aperta back — fecha a tela de convite, volta ao WhatsApp normalmente
                 handler.postDelayed({
-                    closeWhatsAppScreen()
-                    handler.postDelayed({ returnToApp(result.first, result.second) }, 800L)
-                }, 1000L)
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                }, 800L)
+                // 2. Volta pro app On Groups
+                handler.postDelayed({
+                    returnToApp(true, result.second)
+                }, 1800L)
             }
             "already_member" -> {
-                // Já é membro — fecha e segue
                 alreadyActed = true
-                closeWhatsAppScreen()
-                handler.postDelayed({ returnToApp(false, "invalid") }, 800L)
+                handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
+                handler.postDelayed({ returnToApp(false, "invalid") }, 1800L)
             }
             else -> {
                 if (attempt < 3) {
                     // Tenta mais uma vez após 2s
                     handler.postDelayed({ tryActOnScreen(attempt + 1) }, 2000L)
                 } else {
-                    // Nenhum botão encontrado — fecha com X e marca como inválido
+                    // Sem botão — aperta back e marca inválido
                     alreadyActed = true
-                    closeWhatsAppScreen()
-                    handler.postDelayed({ returnToApp(false, "invalid") }, 800L)
+                    handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 500L)
+                    handler.postDelayed({ returnToApp(false, "invalid") }, 1500L)
                 }
             }
         }
-    }
-
-    private fun closeWhatsAppScreen() {
-        // Tenta fechar pelo botão X primeiro
-        val root = rootInActiveWindow
-        if (root != null) {
-            val closeTexts = listOf("fechar", "close", "cancelar", "cancel")
-            for (text in closeTexts) {
-                val nodes = root.findAccessibilityNodeInfosByText(text)
-                for (node in nodes) {
-                    if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); node.recycle(); root.recycle(); return }
-                    node.recycle()
-                }
-            }
-            // Procura botão de fechar percorrendo a árvore
-            val closeNode = findClickableByDesc(root, listOf("fechar", "close", "back", "voltar", "x"))
-            if (closeNode != null) {
-                closeNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                closeNode.recycle()
-                root.recycle()
-                return
-            }
-            root.recycle()
-        }
-        // Se não encontrou botão X, usa o back do sistema
-        performGlobalAction(GLOBAL_ACTION_BACK)
     }
 
     private fun returnToApp(clicked: Boolean, type: String) {
+        lastProcessedTime = System.currentTimeMillis()
+        waitingForGroup = false
         try {
             val appIntent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
             appIntent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -121,22 +99,17 @@ class GroupJoinerService : AccessibilityService() {
         }, 600L)
     }
 
-    private fun closeAndReport(clicked: Boolean, type: String) {
+    private fun finishGroup(clicked: Boolean, type: String) {
         alreadyActed = true
-        closeWhatsAppScreen()
-        handler.postDelayed({ returnToApp(clicked, type) }, 800L)
+        returnToApp(clicked, type)
     }
 
     private fun tryClickJoinButton(root: AccessibilityNodeInfo): Pair<Boolean, String> {
-        // Verificar se já é membro
-        val memberTexts = listOf("você já é membro", "you're already a member", "já participa", "already a participant")
-        for (text in memberTexts) {
-            if (root.findAccessibilityNodeInfosByText(text).isNotEmpty()) {
-                return Pair(false, "already_member")
-            }
+        // Já é membro?
+        for (text in listOf("você já é membro", "you're already a member", "já participa", "already a participant")) {
+            if (root.findAccessibilityNodeInfosByText(text).isNotEmpty()) return Pair(false, "already_member")
         }
-
-        // Botão Entrar
+        // Entrar no grupo
         for (text in listOf("entrar no grupo", "join group", "entrar", "join")) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
@@ -146,8 +119,7 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
-
-        // Botão Enviar Pedido
+        // Enviar pedido
         for (text in listOf("enviar pedido", "send request", "solicitar", "request to join")) {
             val nodes = root.findAccessibilityNodeInfosByText(text)
             for (node in nodes) {
@@ -157,38 +129,24 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
-
         return Pair(false, "not_found")
     }
 
     fun setWaiting(waiting: Boolean) {
         waitingForGroup = waiting
         alreadyActed = false
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
         if (waiting) {
+            // Timeout de 20s — se travar, aperta back e volta
             timeoutRunnable = Runnable {
                 if (waitingForGroup && !alreadyActed) {
-                    closeAndReport(false, "invalid")
+                    alreadyActed = true
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    handler.postDelayed({ returnToApp(false, "invalid") }, 1000L)
                 }
             }
-            handler.postDelayed(timeoutRunnable!!, 18_000L)
-        } else {
-            timeoutRunnable?.let { handler.removeCallbacks(it) }
+            handler.postDelayed(timeoutRunnable!!, 20_000L)
         }
-    }
-
-    private fun findClickableByDesc(node: AccessibilityNodeInfo, descs: List<String>): AccessibilityNodeInfo? {
-        val cd = node.contentDescription?.toString()?.lowercase() ?: ""
-        val txt = node.text?.toString()?.lowercase() ?: ""
-        if (node.isClickable && descs.any { cd.contains(it) || txt.contains(it) }) {
-            return node
-        }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            val found = findClickableByDesc(child, descs)
-            if (found != null) { child.recycle(); return found }
-            child.recycle()
-        }
-        return null
     }
 
     override fun onInterrupt() {}
