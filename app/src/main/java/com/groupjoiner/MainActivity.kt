@@ -1,6 +1,7 @@
 package com.groupjoiner
 
 import android.app.NotificationChannel
+import android.os.PowerManager
 import android.app.NotificationManager
 import android.content.ClipboardManager
 import android.content.Context
@@ -66,6 +67,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchNotifications: Switch
 
     private val handler = Handler(Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
     private var linkList = mutableListOf<String>()
     private var failedLinks = mutableListOf<Pair<Int, String>>()
     private var currentIndex = 0
@@ -273,6 +275,11 @@ class MainActivity : AppCompatActivity() {
         failedLinks.clear()
         btnStart.isEnabled = false
         btnPause.visibility = View.VISIBLE
+        // Manter tela acesa durante o processo
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock?.release()
+        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
+        wakeLock?.acquire(60 * 60 * 1000L) // máximo 1 hora
         btnRetry.visibility = View.GONE
         btnPause.text = "⏸ Pausar"
         progressBar.max = linkList.size
@@ -299,6 +306,8 @@ class MainActivity : AppCompatActivity() {
                 btnPause.visibility = View.GONE
                 if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
                 isRunning = false
+                wakeLock?.release()
+                wakeLock = null
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
             return
@@ -448,6 +457,8 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        wakeLock?.release()
+        wakeLock = null
         countdownRunnable?.let { handler.removeCallbacks(it) }
         handler.removeCallbacksAndMessages(null)
     }
