@@ -102,33 +102,23 @@ class GroupJoinerService : AccessibilityService() {
         isActive = false
         cancelReturnNotification()
 
-        // Estratégia 1: REORDER_TO_FRONT (Motorola, maioria)
+        // Usa ReturnActivity transparente — funciona em TODOS os fabricantes
+        // incluindo Xiaomi/MIUI que bloqueia startActivity de serviços
         try {
-            val i = packageManager.getLaunchIntentForPackage("com.groupjoiner")
-            i?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-            i?.let { startActivity(it) }
-        } catch (e: Exception) { }
-
-        // Estratégia 2: CLEAR_TOP direto (Samsung, OnePlus)
-        try {
-            val i = Intent(applicationContext, MainActivity::class.java)
-            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            val i = Intent(applicationContext, ReturnActivity::class.java)
+            i.putExtra(status, status)
+            i.addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP
+            )
             startActivity(i)
-        } catch (e: Exception) { }
-
-        // Estratégia 3: Notificação clicável (Xiaomi, MIUI, EMUI)
-        // Mostra notificação para o usuário tocar e voltar
-        showReturnNotification(status)
-
-        // Notifica o resultado após 1s
-        handler.postDelayed({
-            MainActivity.instance?.onGroupProcessed(status)
-        }, 1000L)
-
-        // Tenta novamente após 2s caso ainda não tenha voltado
-        handler.postDelayed({
-            MainActivity.instance?.onGroupProcessed(status)
-        }, 2500L)
+        } catch (e: Exception) {
+            // Fallback: notifica diretamente se ReturnActivity falhar
+            handler.postDelayed({
+                MainActivity.instance?.onGroupProcessed(status)
+            }, 500L)
+        }
     }
 
     private fun showReturnNotification(status: String) {
