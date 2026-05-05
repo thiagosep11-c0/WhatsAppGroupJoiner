@@ -77,7 +77,7 @@ class MainActivity : AppCompatActivity() {
     private var countdownRunnable: Runnable? = null
     private var isPaused = false
     private var isRunning = false
-    private var lastProcessedIndex = -1
+    private var processingToken = -1L  // token único por grupo
     private var maxGroups = 0
     private val defaultIntervals = listOf(5_000L, 30_000L, 40_000L, 50_000L, 60_000L)
 
@@ -288,7 +288,7 @@ class MainActivity : AppCompatActivity() {
         tvLinkCount.text = "${linkList.size} links"
 
         currentIndex = 0
-        lastProcessedIndex = -1
+        processingToken = -1L
         isPaused = false
         isRunning = true
         failedLinks.clear()
@@ -337,7 +337,9 @@ class MainActivity : AppCompatActivity() {
             tvCountdown.text = "🔗 Abrindo..."
         }
 
-        GroupJoinerService.serviceInstance?.setWaiting(true)
+        // Gera token único para este grupo
+        processingToken = System.currentTimeMillis()
+        GroupJoinerService.serviceInstance?.setWaiting(true, processingToken)
 
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link)).apply {
             setPackage(selectedPackage)
@@ -354,9 +356,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    fun onGroupProcessed(status: String) {
-        if (currentIndex == lastProcessedIndex) return
-        lastProcessedIndex = currentIndex
+    fun onGroupProcessed(status: String, token: Long = -1L) {
+        // Se token foi fornecido e nao bate, ignora
+        if (token != -1L && token != processingToken) return
+        // Zera token para nao processar duas vezes
+        if (processingToken == -1L) return
+        processingToken = -1L
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
         if (status == "invalid") failedLinks.add(Pair(currentIndex, link))
         updateLinkStatus(currentIndex, status)

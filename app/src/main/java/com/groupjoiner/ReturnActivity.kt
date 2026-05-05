@@ -9,14 +9,17 @@ class ReturnActivity : Activity() {
         super.onCreate(savedInstanceState)
         
         val status = intent.getStringExtra("status") ?: "invalid"
+        val token = intent.getLongExtra("token", -1L)
         
         // Abre MainActivity por cima
-        val intent = Intent(this, MainActivity::class.java)
-        intent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-        startActivity(intent)
+        val mainIntent = Intent(this, MainActivity::class.java)
+        mainIntent.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(mainIntent)
         
-        // Notifica o resultado
-        MainActivity.instance?.onGroupProcessed(status)
+        // Notifica o resultado com token para evitar duplicatas
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            MainActivity.instance?.onGroupProcessed(status, token)
+        }, 400L)
         
         finish()
     }

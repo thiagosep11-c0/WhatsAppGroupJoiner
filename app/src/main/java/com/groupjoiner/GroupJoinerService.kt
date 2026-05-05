@@ -16,6 +16,7 @@ class GroupJoinerService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = false
+    private var currentToken = -1L
     private var timeoutRunnable: Runnable? = null
     private var checkRunnable: Runnable? = null
 
@@ -34,8 +35,9 @@ class GroupJoinerService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 
-    fun setWaiting(waiting: Boolean) {
+    fun setWaiting(waiting: Boolean, token: Long = -1L) {
         isActive = waiting
+        currentToken = token
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         checkRunnable?.let { handler.removeCallbacks(it) }
 
@@ -115,8 +117,9 @@ class GroupJoinerService : AccessibilityService() {
             startActivity(i)
         } catch (e: Exception) {
             // Fallback: notifica diretamente se ReturnActivity falhar
+            val t = currentToken
             handler.postDelayed({
-                MainActivity.instance?.onGroupProcessed(status)
+                MainActivity.instance?.onGroupProcessed(status, t)
             }, 500L)
         }
     }
