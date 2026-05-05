@@ -178,11 +178,33 @@ class GroupJoinerService : AccessibilityService() {
     private fun returnToApp(status: String) {
         isActive = false
         try {
+            // Estratégia 1: REORDER_TO_FRONT (funciona na maioria)
             val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
-            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent?.addFlags(
+                Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
+            )
             intent?.let { startActivity(it) }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {
+            try {
+                // Estratégia 2: Intent direto para MainActivity
+                val intent = Intent(applicationContext, MainActivity::class.java)
+                intent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                )
+                startActivity(intent)
+            } catch (e2: Exception) { }
+        }
+        // Notifica o app em múltiplos momentos para garantir
         handler.postDelayed({ MainActivity.instance?.onGroupProcessed(status) }, 600L)
+        handler.postDelayed({ 
+            if (MainActivity.instance != null) {
+                MainActivity.instance?.onGroupProcessed(status)
+            }
+        }, 1500L)
     }
 
     override fun onDestroy() {

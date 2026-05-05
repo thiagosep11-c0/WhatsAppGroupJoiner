@@ -285,7 +285,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private var lastProcessedIndex = -1
+
     fun onGroupProcessed(status: String) {
+        // Evita processar o mesmo grupo duas vezes
+        if (currentIndex == lastProcessedIndex) return
+        lastProcessedIndex = currentIndex
+
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
         val failed = status == "invalid"
         if (failed) failedLinks.add(Pair(currentIndex, link))
