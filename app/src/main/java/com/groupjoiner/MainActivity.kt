@@ -2,6 +2,8 @@ package com.groupjoiner
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -12,6 +14,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.View
 import android.view.accessibility.AccessibilityManager
+import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -21,17 +24,13 @@ import androidx.recyclerview.widget.RecyclerView
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var editTextLinks: EditText
-    private lateinit var btnEditLinks: Button
-    private lateinit var btnCloseEdit: Button
-    private lateinit var btnPasteLinks: Button
-    private lateinit var btnClearLinks: Button
-    private lateinit var tvLinkCount: TextView
-    private lateinit var pageEditLinks: View
+    // Views - Home
     private lateinit var btnStart: Button
     private lateinit var btnPause: Button
     private lateinit var btnRetry: Button
     private lateinit var btnPermission: Button
+    private lateinit var btnEditLinks: Button
+    private lateinit var tvLinkCount: TextView
     private lateinit var tvCountdown: TextView
     private lateinit var tvProgress: TextView
     private lateinit var tvLinkListTitle: TextView
@@ -39,6 +38,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var radioNormal: RadioButton
     private lateinit var radioBusiness: RadioButton
 
+    // Views - Edit Links
+    private lateinit var editTextLinks: EditText
+    private lateinit var btnCloseEdit: Button
+    private lateinit var btnPasteLinks: Button
+    private lateinit var btnClearLinks: Button
+    private lateinit var pageEditLinks: View
+
+    // Abas
     private lateinit var tabHome: TextView
     private lateinit var tabHistory: TextView
     private lateinit var tabSettings: TextView
@@ -46,14 +53,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var pageHistory: View
     private lateinit var pageSettings: View
 
-    private lateinit var recyclerLinks: RecyclerView
+    // Histórico
     private lateinit var recyclerHistory: RecyclerView
+    private lateinit var recyclerLinks: RecyclerView
     private lateinit var tvHistoryCount: TextView
     private lateinit var btnClearHistory: Button
     private lateinit var historyAdapter: HistoryAdapter
     private lateinit var linkAdapter: LinkAdapter
     private val linkItems = mutableListOf<LinkItem>()
 
+    // Settings
     private lateinit var etInterval1: EditText
     private lateinit var etInterval2: EditText
     private lateinit var etInterval3: EditText
@@ -68,9 +77,8 @@ class MainActivity : AppCompatActivity() {
     private var countdownRunnable: Runnable? = null
     private var isPaused = false
     private var isRunning = false
-
+    private var lastProcessedIndex = -1
     private var maxGroups = 0
-    // Intervalos: 5s, 30s, 40s, 50s, 60s, repetindo
     private val defaultIntervals = listOf(5_000L, 30_000L, 40_000L, 50_000L, 60_000L)
 
     companion object {
@@ -90,17 +98,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindViews() {
-        editTextLinks    = findViewById(R.id.editTextLinks)
         btnStart         = findViewById(R.id.btnStart)
         btnPause         = findViewById(R.id.btnPause)
         btnRetry         = findViewById(R.id.btnRetry)
         btnPermission    = findViewById(R.id.btnPermission)
+        btnEditLinks     = findViewById(R.id.btnEditLinks)
+        tvLinkCount      = findViewById(R.id.tvLinkCount)
         tvCountdown      = findViewById(R.id.tvCountdown)
         tvProgress       = findViewById(R.id.tvProgress)
         tvLinkListTitle  = findViewById(R.id.tvLinkListTitle)
         progressBar      = findViewById(R.id.progressBar)
         radioNormal      = findViewById(R.id.radioNormal)
         radioBusiness    = findViewById(R.id.radioBusiness)
+        editTextLinks    = findViewById(R.id.editTextLinks)
+        btnCloseEdit     = findViewById(R.id.btnCloseEdit)
+        btnPasteLinks    = findViewById(R.id.btnPasteLinks)
+        btnClearLinks    = findViewById(R.id.btnClearLinks)
+        pageEditLinks    = findViewById(R.id.pageEditLinks)
         tabHome          = findViewById(R.id.tabHome)
         tabHistory       = findViewById(R.id.tabHistory)
         tabSettings      = findViewById(R.id.tabSettings)
@@ -128,10 +142,6 @@ class MainActivity : AppCompatActivity() {
 
         btnPause.visibility = View.GONE
         btnRetry.visibility = View.GONE
-
-        etInterval1.setText("30")
-        etInterval2.setText("2")
-        etInterval3.setText("60")
         etMaxGroups.setText("0")
     }
 
@@ -142,33 +152,30 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
+        // Abrir tela de edição de links
         btnEditLinks.setOnClickListener {
-            pageHome.visibility = android.view.View.GONE
-            pageEditLinks.visibility = android.view.View.VISIBLE
+            pageHome.visibility = View.GONE
+            pageEditLinks.visibility = View.VISIBLE
             editTextLinks.requestFocus()
         }
 
+        // Confirmar edição de links
         btnCloseEdit.setOnClickListener {
-            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(editTextLinks.windowToken, 0)
-            pageEditLinks.visibility = android.view.View.GONE
-            pageHome.visibility = android.view.View.VISIBLE
-            val raw = editTextLinks.text.toString().trim()
-            val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
-            val count = raw.split("
-").map { it.trim() }
-                .map { line -> prefixRegex.replace(line, "").trim() }
-                .count { it.startsWith("http") }
-            tvLinkCount.text = "$count links"
+            pageEditLinks.visibility = View.GONE
+            pageHome.visibility = View.VISIBLE
+            updateLinkCount()
         }
 
+        // Colar da área de transferência
         btnPasteLinks.setOnClickListener {
-            val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
             if (text.isNotEmpty()) {
                 val current = editTextLinks.text.toString()
-                editTextLinks.setText(if (current.isBlank()) text else "$current
-$text")
+                val newText = if (current.isBlank()) text else "$current\n$text"
+                editTextLinks.setText(newText)
                 editTextLinks.setSelection(editTextLinks.text.length)
                 Toast.makeText(this, "Links colados!", Toast.LENGTH_SHORT).show()
             } else {
@@ -176,6 +183,7 @@ $text")
             }
         }
 
+        // Limpar links
         btnClearLinks.setOnClickListener {
             editTextLinks.setText("")
             tvLinkCount.text = "0 links"
@@ -204,7 +212,10 @@ $text")
         }
 
         btnRetry.setOnClickListener {
-            if (failedLinks.isEmpty()) { Toast.makeText(this, "Nenhuma falha!", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
+            if (failedLinks.isEmpty()) {
+                Toast.makeText(this, "Nenhuma falha!", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             AlertDialog.Builder(this)
                 .setTitle("Retentar ${failedLinks.size} falhas?")
                 .setPositiveButton("Sim") { _, _ ->
@@ -216,7 +227,7 @@ $text")
         }
 
         btnClearHistory.setOnClickListener {
-            AlertDialog.Builder(this).setTitle("Limpar histórico?")
+            AlertDialog.Builder(this).setTitle("Limpar historico?")
                 .setPositiveButton("Sim") { _, _ ->
                     HistoryManager.clear()
                     historyAdapter.notifyDataSetChanged()
@@ -227,11 +238,23 @@ $text")
         switchDarkMode.setOnCheckedChangeListener { _, checked -> applyTheme(checked) }
     }
 
+    private fun updateLinkCount() {
+        val raw = editTextLinks.text.toString().trim()
+        val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
+        val count = raw.split("\n")
+            .map { it.trim() }
+            .map { line -> prefixRegex.replace(line, "").trim() }
+            .count { it.startsWith("http") }
+        tvLinkCount.text = "$count links"
+    }
+
     private fun startProcessing(existingList: MutableList<String>? = null) {
         if (!isAccessibilityEnabled()) {
-            AlertDialog.Builder(this).setTitle("Permissão necessária")
-                .setMessage("Ative o 'Group Joiner Service' em Configurações > Acessibilidade.")
-                .setPositiveButton("Ir para Configurações") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            AlertDialog.Builder(this).setTitle("Permissao necessaria")
+                .setMessage("Ative o 'Group Joiner Service' em Configuracoes > Acessibilidade.")
+                .setPositiveButton("Ir para Configuracoes") { _, _ ->
+                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
                 .setNegativeButton("Cancelar", null).show()
             return
         }
@@ -246,22 +269,26 @@ $text")
                 .map { it.trim() }
                 .map { line -> prefixRegex.replace(line, "").trim() }
                 .filter { it.startsWith("http") }
-                .distinct() // evitar duplicatas
+                .distinct()
                 .let { if (maxGroups > 0) it.take(maxGroups) else it }
                 .toMutableList()
         } else {
             linkList = existingList
         }
 
-        if (linkList.isEmpty()) { Toast.makeText(this, "Nenhum link válido!", Toast.LENGTH_SHORT).show(); return }
+        if (linkList.isEmpty()) {
+            Toast.makeText(this, "Nenhum link valido! Clique em Editar Links primeiro.", Toast.LENGTH_LONG).show()
+            return
+        }
 
-        // Montar lista visual
         linkItems.clear()
         linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
         linkAdapter.notifyDataSetChanged()
         tvLinkListTitle.text = "Grupos (${linkList.size})"
+        tvLinkCount.text = "${linkList.size} links"
 
         currentIndex = 0
+        lastProcessedIndex = -1
         isPaused = false
         isRunning = true
         failedLinks.clear()
@@ -273,7 +300,6 @@ $text")
         progressBar.progress = 0
         tvProgress.text = "0/${linkList.size}"
         tvCountdown.text = ""
-
         openNextLink()
     }
 
@@ -286,7 +312,7 @@ $text")
             val pendingC = linkItems.count { it.status == "pending" }
             val failed = linkItems.count { it.status == "invalid" }
             runOnUiThread {
-                tvCountdown.text = "✅ Concluído!"
+                tvCountdown.text = "✅ Concluido!"
                 tvProgress.text = "${linkList.size}/${linkList.size}"
                 progressBar.progress = linkList.size
                 btnStart.isEnabled = true
@@ -299,8 +325,6 @@ $text")
         }
 
         val link = linkList[currentIndex]
-
-        // Atualizar item na lista como "current"
         runOnUiThread {
             if (currentIndex < linkItems.size) {
                 linkItems[currentIndex].status = "current"
@@ -323,23 +347,18 @@ $text")
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            updateLinkStatus(currentIndex, "error")
+            updateLinkStatus(currentIndex, "invalid")
             failedLinks.add(Pair(currentIndex, link))
             GroupJoinerService.serviceInstance?.setWaiting(false)
             scheduleNext()
         }
     }
 
-    private var lastProcessedIndex = -1
-
     fun onGroupProcessed(status: String) {
-        // Evita processar o mesmo grupo duas vezes
         if (currentIndex == lastProcessedIndex) return
         lastProcessedIndex = currentIndex
-
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
-        val failed = status == "invalid"
-        if (failed) failedLinks.add(Pair(currentIndex, link))
+        if (status == "invalid") failedLinks.add(Pair(currentIndex, link))
         updateLinkStatus(currentIndex, status)
         addToHistory(link, status)
         scheduleNext()
@@ -359,12 +378,10 @@ $text")
         val delay = defaultIntervals[currentIndex % defaultIntervals.size]
         val nextIdx = currentIndex + 1
         currentIndex++
-
         runOnUiThread {
             progressBar.progress = currentIndex
-            tvProgress.text = "${currentIndex}/${linkList.size}"
+            tvProgress.text = "$currentIndex/${linkList.size}"
         }
-
         startCountdown(delay, nextIdx) { openNextLink() }
     }
 
@@ -390,7 +407,6 @@ $text")
             val timeStr = if (secs >= 60) String.format("%d:%02d", secs / 60, secs % 60) else "${secs}s"
             runOnUiThread {
                 tvCountdown.text = "⏱ $timeStr"
-                // Mostrar countdown na frente do próximo link
                 if (nextIdx < linkItems.size) {
                     linkItems[nextIdx].countdown = timeStr
                     linkAdapter.notifyItemChanged(nextIdx)
@@ -446,12 +462,12 @@ $text")
         }
     }
 
-    private fun sendFinishedNotification(joined: Int, requested: Int, failed: Int) {
+    private fun sendFinishedNotification(joined: Int, waiting: Int, failed: Int) {
         val nm = getSystemService(NotificationManager::class.java)
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("On Groups — Concluído!")
-            .setContentText("✅ $joined entrou  ⏳ $requested aguardando  ⚠️ $failed falhou")
+            .setContentTitle("On Groups — Concluido!")
+            .setContentText("✅ $joined entrou  ⏳ $waiting aguardando  ❌ $failed falhou")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT).build()
         nm.notify(1, notif)
     }
