@@ -22,6 +22,12 @@ import androidx.recyclerview.widget.RecyclerView
 class MainActivity : AppCompatActivity() {
 
     private lateinit var editTextLinks: EditText
+    private lateinit var btnEditLinks: Button
+    private lateinit var btnCloseEdit: Button
+    private lateinit var btnPasteLinks: Button
+    private lateinit var btnClearLinks: Button
+    private lateinit var tvLinkCount: TextView
+    private lateinit var pageEditLinks: View
     private lateinit var btnStart: Button
     private lateinit var btnPause: Button
     private lateinit var btnRetry: Button
@@ -136,6 +142,45 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupButtons() {
+        btnEditLinks.setOnClickListener {
+            pageHome.visibility = android.view.View.GONE
+            pageEditLinks.visibility = android.view.View.VISIBLE
+            editTextLinks.requestFocus()
+        }
+
+        btnCloseEdit.setOnClickListener {
+            val imm = getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+            imm.hideSoftInputFromWindow(editTextLinks.windowToken, 0)
+            pageEditLinks.visibility = android.view.View.GONE
+            pageHome.visibility = android.view.View.VISIBLE
+            val raw = editTextLinks.text.toString().trim()
+            val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
+            val count = raw.split("
+").map { it.trim() }
+                .map { line -> prefixRegex.replace(line, "").trim() }
+                .count { it.startsWith("http") }
+            tvLinkCount.text = "$count links"
+        }
+
+        btnPasteLinks.setOnClickListener {
+            val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+            if (text.isNotEmpty()) {
+                val current = editTextLinks.text.toString()
+                editTextLinks.setText(if (current.isBlank()) text else "$current
+$text")
+                editTextLinks.setSelection(editTextLinks.text.length)
+                Toast.makeText(this, "Links colados!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Area de transferencia vazia", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnClearLinks.setOnClickListener {
+            editTextLinks.setText("")
+            tvLinkCount.text = "0 links"
+        }
+
         btnPermission.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }

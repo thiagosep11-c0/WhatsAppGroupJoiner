@@ -7,59 +7,123 @@
     android:background="#FFFFFF">
 
     <!-- Header -->
-    <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:background="#000000" android:gravity="center_vertical" android:paddingStart="12dp">
-        <ImageView android:layout_width="40dp" android:layout_height="40dp" android:src="@drawable/ic_logo" android:layout_marginEnd="10dp"/>
-        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="On Groups" android:textSize="20sp" android:textStyle="bold" android:textColor="#FFB800"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="52dp"
+        android:background="#000000" android:gravity="center_vertical" android:paddingStart="12dp">
+        <ImageView android:layout_width="36dp" android:layout_height="36dp"
+            android:src="@drawable/ic_logo" android:layout_marginEnd="10dp"/>
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="On Groups" android:textSize="20sp" android:textStyle="bold"
+            android:textColor="#FFB800"/>
     </LinearLayout>
 
     <!-- Abas -->
-    <LinearLayout android:layout_width="match_parent" android:layout_height="44dp" android:orientation="horizontal" android:background="#FFFFFF">
-        <TextView android:id="@+id/tabHome" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="🏠 Início" android:gravity="center" android:textSize="13sp" android:textStyle="bold" android:textColor="#075E54" android:background="#E8F5E9"/>
-        <TextView android:id="@+id/tabHistory" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="📋 Histórico" android:gravity="center" android:textSize="13sp" android:textColor="#888888" android:background="#FFFFFF"/>
-        <TextView android:id="@+id/tabSettings" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="⚙️ Config" android:gravity="center" android:textSize="13sp" android:textColor="#888888" android:background="#FFFFFF"/>
+    <LinearLayout android:layout_width="match_parent" android:layout_height="44dp"
+        android:orientation="horizontal" android:background="#FFFFFF">
+        <TextView android:id="@+id/tabHome" android:layout_width="0dp"
+            android:layout_height="match_parent" android:layout_weight="1"
+            android:text="🏠 Início" android:gravity="center" android:textSize="13sp"
+            android:textStyle="bold" android:textColor="#075E54" android:background="#E8F5E9"/>
+        <TextView android:id="@+id/tabHistory" android:layout_width="0dp"
+            android:layout_height="match_parent" android:layout_weight="1"
+            android:text="📋 Histórico" android:gravity="center" android:textSize="13sp"
+            android:textColor="#888888" android:background="#FFFFFF"/>
+        <TextView android:id="@+id/tabSettings" android:layout_width="0dp"
+            android:layout_height="match_parent" android:layout_weight="1"
+            android:text="⚙️ Config" android:gravity="center" android:textSize="13sp"
+            android:textColor="#888888" android:background="#FFFFFF"/>
     </LinearLayout>
     <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0"/>
 
     <!-- PAGE HOME -->
-    <LinearLayout android:id="@+id/pageHome" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:visibility="visible">
+    <LinearLayout android:id="@+id/pageHome" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:orientation="vertical" android:visibility="visible">
 
-        <!-- Parte de cima: inputs -->
-        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical" android:padding="12dp">
+        <!-- Controles fixos no topo -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical" android:padding="10dp" android:background="#FFFFFF">
 
-            <RadioGroup android:id="@+id/radioGroup" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="8dp">
-                <RadioButton android:id="@+id/radioNormal" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WhatsApp" android:checked="true"/>
-                <RadioButton android:id="@+id/radioBusiness" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WA Business"/>
+            <!-- WhatsApp selector -->
+            <RadioGroup android:id="@+id/radioGroup" android:layout_width="match_parent"
+                android:layout_height="36dp" android:orientation="horizontal" android:layout_marginBottom="8dp">
+                <RadioButton android:id="@+id/radioNormal" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WhatsApp" android:checked="true" android:textSize="13sp"/>
+                <RadioButton android:id="@+id/radioBusiness" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WA Business" android:textSize="13sp"/>
             </RadioGroup>
 
-            <EditText android:id="@+id/editTextLinks" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:hint="1 - https://chat.whatsapp.com/XXXX&#10;2 - https://chat.whatsapp.com/YYYY" android:gravity="top" android:inputType="textMultiLine" android:background="@drawable/edittext_border" android:padding="10dp" android:textSize="12sp" android:layout_marginBottom="8dp"/>
+            <!-- Botão para editar links -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="40dp"
+                android:orientation="horizontal" android:layout_marginBottom="8dp">
+                <Button android:id="@+id/btnEditLinks"
+                    android:layout_width="0dp" android:layout_height="match_parent"
+                    android:layout_weight="1"
+                    android:text="✏️ Editar / Colar Links"
+                    android:backgroundTint="#37474F" android:textColor="#FFFFFF"
+                    android:textSize="12sp" android:layout_marginEnd="6dp"/>
+                <TextView android:id="@+id/tvLinkCount"
+                    android:layout_width="wrap_content" android:layout_height="match_parent"
+                    android:text="0 links" android:textSize="12sp"
+                    android:textColor="#075E54" android:gravity="center"
+                    android:paddingStart="8dp" android:paddingEnd="8dp"
+                    android:background="#E8F5E9"/>
+            </LinearLayout>
 
             <!-- Progresso -->
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="4dp">
-                <ProgressBar android:id="@+id/progressBar" style="?android:attr/progressBarStyleHorizontal" android:layout_width="0dp" android:layout_height="10dp" android:layout_weight="1" android:progressTint="#075E54" android:layout_marginEnd="8dp"/>
-                <TextView android:id="@+id/tvProgress" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0/0" android:textSize="11sp" android:textColor="#075E54"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="6dp">
+                <ProgressBar android:id="@+id/progressBar"
+                    style="?android:attr/progressBarStyleHorizontal"
+                    android:layout_width="0dp" android:layout_height="10dp"
+                    android:layout_weight="1" android:progressTint="#075E54" android:layout_marginEnd="8dp"/>
+                <TextView android:id="@+id/tvProgress" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text="0/0"
+                    android:textSize="11sp" android:textColor="#075E54"/>
             </LinearLayout>
 
-            <!-- Botões -->
-            <Button android:id="@+id/btnPermission" android:layout_width="match_parent" android:layout_height="40dp" android:text="1. Ativar Acessibilidade" android:backgroundTint="#FF9800" android:textColor="#FFFFFF" android:textSize="13sp" android:layout_marginBottom="6dp"/>
+            <!-- Botões ação -->
+            <Button android:id="@+id/btnPermission" android:layout_width="match_parent"
+                android:layout_height="40dp" android:text="1. Ativar Acessibilidade"
+                android:backgroundTint="#FF9800" android:textColor="#FFFFFF"
+                android:textSize="13sp" android:layout_marginBottom="6dp"/>
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="6dp">
-                <Button android:id="@+id/btnStart" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="▶ Iniciar" android:backgroundTint="#075E54" android:textColor="#FFFFFF" android:textSize="14sp" android:layout_marginEnd="5dp"/>
-                <Button android:id="@+id/btnPause" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1" android:text="⏸ Pausar" android:backgroundTint="#FF9800" android:textColor="#FFFFFF" android:textSize="14sp" android:layout_marginStart="5dp" android:visibility="gone"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginBottom="4dp">
+                <Button android:id="@+id/btnStart" android:layout_width="0dp"
+                    android:layout_height="48dp" android:layout_weight="1"
+                    android:text="▶ Iniciar" android:backgroundTint="#075E54"
+                    android:textColor="#FFFFFF" android:textSize="14sp" android:layout_marginEnd="5dp"/>
+                <Button android:id="@+id/btnPause" android:layout_width="0dp"
+                    android:layout_height="48dp" android:layout_weight="1"
+                    android:text="⏸ Pausar" android:backgroundTint="#FF9800"
+                    android:textColor="#FFFFFF" android:textSize="14sp"
+                    android:layout_marginStart="5dp" android:visibility="gone"/>
             </LinearLayout>
 
-            <Button android:id="@+id/btnRetry" android:layout_width="match_parent" android:layout_height="40dp" android:text="🔄 Retentar Falhas" android:backgroundTint="#F44336" android:textColor="#FFFFFF" android:textSize="13sp" android:visibility="gone"/>
+            <Button android:id="@+id/btnRetry" android:layout_width="match_parent"
+                android:layout_height="38dp" android:text="🔄 Retentar Falhas"
+                android:backgroundTint="#F44336" android:textColor="#FFFFFF"
+                android:textSize="13sp" android:visibility="gone"/>
 
         </LinearLayout>
 
-        <!-- Divisor -->
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0"/>
 
-        <!-- Parte de baixo: lista de links -->
-        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:orientation="vertical">
+        <!-- Lista de grupos ocupa o resto da tela -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent"
+            android:orientation="vertical">
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="36dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="12dp" android:paddingEnd="12dp" android:background="#F5F5F5">
-                <TextView android:id="@+id/tvLinkListTitle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Grupos (0)" android:textSize="12sp" android:textStyle="bold" android:textColor="#333333"/>
-                <TextView android:id="@+id/tvCountdown" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="" android:textSize="13sp" android:textStyle="bold" android:textColor="#075E54"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="32dp"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:paddingStart="12dp" android:paddingEnd="12dp" android:background="#F5F5F5">
+                <TextView android:id="@+id/tvLinkListTitle" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Grupos (0)" android:textSize="12sp"
+                    android:textStyle="bold" android:textColor="#333333"/>
+                <TextView android:id="@+id/tvCountdown" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:text=""
+                    android:textSize="13sp" android:textStyle="bold" android:textColor="#075E54"/>
             </LinearLayout>
 
             <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0"/>
@@ -72,39 +136,126 @@
 
     </LinearLayout>
 
+    <!-- DIALOG de edição de links (oculto por padrão) -->
+    <LinearLayout android:id="@+id/pageEditLinks"
+        android:layout_width="match_parent" android:layout_height="match_parent"
+        android:orientation="vertical" android:background="#FFFFFF"
+        android:visibility="gone">
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="52dp"
+            android:background="#075E54" android:gravity="center_vertical"
+            android:paddingStart="12dp" android:paddingEnd="12dp">
+            <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="Cole os links aqui"
+                android:textSize="16sp" android:textStyle="bold" android:textColor="#FFFFFF"/>
+            <Button android:id="@+id/btnCloseEdit"
+                android:layout_width="wrap_content" android:layout_height="36dp"
+                android:text="✓ Confirmar" android:backgroundTint="#FFB800"
+                android:textColor="#000000" android:textSize="13sp"/>
+        </LinearLayout>
+
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:text="Cole os links abaixo, um por linha. Pode usar: '1 - https://...' ou só 'https://...'"
+            android:textSize="12sp" android:textColor="#666666"
+            android:padding="10dp" android:background="#F5F5F5"/>
+
+        <EditText
+            android:id="@+id/editTextLinks"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:hint="1 - https://chat.whatsapp.com/XXXX&#10;2 - https://chat.whatsapp.com/YYYY"
+            android:gravity="top"
+            android:inputType="textMultiLine"
+            android:padding="12dp"
+            android:textSize="13sp"
+            android:background="#FFFFFF"/>
+
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:padding="10dp">
+            <Button android:id="@+id/btnPasteLinks"
+                android:layout_width="0dp" android:layout_height="44dp"
+                android:layout_weight="1" android:text="📋 Colar da Área"
+                android:backgroundTint="#1565C0" android:textColor="#FFFFFF"
+                android:textSize="13sp" android:layout_marginEnd="6dp"/>
+            <Button android:id="@+id/btnClearLinks"
+                android:layout_width="0dp" android:layout_height="44dp"
+                android:layout_weight="1" android:text="🗑️ Limpar"
+                android:backgroundTint="#F44336" android:textColor="#FFFFFF"
+                android:textSize="13sp"/>
+        </LinearLayout>
+
+    </LinearLayout>
+
     <!-- PAGE HISTORY -->
-    <LinearLayout android:id="@+id/pageHistory" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:visibility="gone">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="44dp" android:orientation="horizontal" android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="16dp">
-            <TextView android:id="@+id/tvHistoryCount" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="0 entradas" android:textSize="12sp" android:textColor="#666666"/>
-            <Button android:id="@+id/btnClearHistory" android:layout_width="wrap_content" android:layout_height="34dp" android:text="Limpar" android:backgroundTint="#F44336" android:textColor="#FFFFFF" android:textSize="12sp"/>
+    <LinearLayout android:id="@+id/pageHistory" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:orientation="vertical" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="44dp"
+            android:orientation="horizontal" android:gravity="center_vertical"
+            android:paddingStart="16dp" android:paddingEnd="16dp">
+            <TextView android:id="@+id/tvHistoryCount" android:layout_width="0dp"
+                android:layout_height="wrap_content" android:layout_weight="1"
+                android:text="0 entradas" android:textSize="12sp" android:textColor="#666666"/>
+            <Button android:id="@+id/btnClearHistory" android:layout_width="wrap_content"
+                android:layout_height="34dp" android:text="Limpar"
+                android:backgroundTint="#F44336" android:textColor="#FFFFFF" android:textSize="12sp"/>
         </LinearLayout>
         <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0"/>
-        <androidx.recyclerview.widget.RecyclerView android:id="@+id/recyclerHistory" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="8dp" android:clipToPadding="false"/>
+        <androidx.recyclerview.widget.RecyclerView android:id="@+id/recyclerHistory"
+            android:layout_width="match_parent" android:layout_height="match_parent"
+            android:padding="8dp" android:clipToPadding="false"/>
     </LinearLayout>
 
     <!-- PAGE SETTINGS -->
-    <ScrollView android:id="@+id/pageSettings" android:layout_width="match_parent" android:layout_height="match_parent" android:padding="16dp" android:visibility="gone">
-        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical">
+    <ScrollView android:id="@+id/pageSettings" android:layout_width="match_parent"
+        android:layout_height="match_parent" android:padding="16dp" android:visibility="gone">
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="vertical">
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="⏱ Padrão de intervalos" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Grupo 1 → 5s → Grupo 2 → 30s → Grupo 3 → 40s → Grupo 4 → 50s → Grupo 5 → 60s → repete" android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5" android:padding="10dp" android:layout_marginBottom="16dp"/>
-            <EditText android:id="@+id/etInterval1" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
-            <EditText android:id="@+id/etInterval2" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
-            <EditText android:id="@+id/etInterval3" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="⏱ Padrão de intervalos" android:textSize="14sp"
+                android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Grupo 1 → 5s → Grupo 2 → 30s → Grupo 3 → 40s → Grupo 4 → 50s → Grupo 5 → 60s → repete"
+                android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5"
+                android:padding="10dp" android:layout_marginBottom="16dp"/>
 
-            <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="🔢 Máximo de grupos por sessão (0 = sem limite)" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="8dp"/>
-            <EditText android:id="@+id/etMaxGroups" android:layout_width="match_parent" android:layout_height="wrap_content" android:inputType="number" android:text="0" android:background="@drawable/edittext_border" android:padding="10dp" android:layout_marginBottom="20dp"/>
+            <EditText android:id="@+id/etInterval1" android:layout_width="1dp"
+                android:layout_height="1dp" android:visibility="gone"/>
+            <EditText android:id="@+id/etInterval2" android:layout_width="1dp"
+                android:layout_height="1dp" android:visibility="gone"/>
+            <EditText android:id="@+id/etInterval3" android:layout_width="1dp"
+                android:layout_height="1dp" android:visibility="gone"/>
 
-            <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="🔢 Máximo de grupos por sessão (0 = sem limite)"
+                android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"
+                android:layout_marginBottom="8dp"/>
+            <EditText android:id="@+id/etMaxGroups" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:inputType="number" android:text="0"
+                android:background="@drawable/edittext_border" android:padding="10dp"
+                android:layout_marginBottom="20dp"/>
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="12dp">
-                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="🌙 Modo Escuro" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
-                <Switch android:id="@+id/switchDarkMode" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="12dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="🌙 Modo Escuro"
+                    android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
+                <Switch android:id="@+id/switchDarkMode" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"/>
             </LinearLayout>
 
-            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center_vertical">
-                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="🔔 Notificação ao concluir" android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
-                <Switch android:id="@+id/switchNotifications" android:layout_width="wrap_content" android:layout_height="wrap_content" android:checked="true"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="🔔 Notificação ao concluir"
+                    android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
+                <Switch android:id="@+id/switchNotifications" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:checked="true"/>
             </LinearLayout>
 
         </LinearLayout>
