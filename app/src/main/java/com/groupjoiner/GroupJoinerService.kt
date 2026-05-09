@@ -144,8 +144,8 @@ class GroupJoinerService : AccessibilityService() {
         // Tenta achar campo editável
         val inputNode = allNodes.firstOrNull { node ->
             node.isEditable && (
-                inputHints.any { (node.hint?.toString() ?: "").lowercase().contains(it) } ||
                 inputHints.any { (node.contentDescription?.toString() ?: "").lowercase().contains(it) } ||
+                inputHints.any { (node.text?.toString() ?: "").lowercase().contains(it) } ||
                 node.className?.toString()?.contains("EditText") == true
             )
         }
