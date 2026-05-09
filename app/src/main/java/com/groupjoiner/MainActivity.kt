@@ -65,6 +65,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etInterval3: EditText
     private lateinit var switchDarkMode: Switch
     private lateinit var switchNotifications: Switch
+    private lateinit var switchSendMessage: Switch
+    private lateinit var etMessage: EditText
+    private var phase2Links = mutableListOf<String>()
+    private var isPhase2 = false
 
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
@@ -128,6 +132,8 @@ class MainActivity : AppCompatActivity() {
         etInterval3     = findViewById(R.id.etInterval3)
         switchDarkMode  = findViewById(R.id.switchDarkMode)
         switchNotifications = findViewById(R.id.switchNotifications)
+        switchSendMessage = findViewById(R.id.switchSendMessage)
+        etMessage = findViewById(R.id.etMessage)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -308,6 +314,19 @@ class MainActivity : AppCompatActivity() {
                 isRunning = false
                 wakeLock?.release()
                 wakeLock = null
+                // Se ativado envio de mensagem e houve grupos entrados — inicia Fase 2
+                if (switchSendMessage.isChecked && !isPhase2 && joined > 0) {
+                    val msg = etMessage.text.toString().trim()
+                    if (msg.isNotEmpty()) {
+                        handler.postDelayed({
+                            startPhase2(msg)
+                        }, 3000L)
+                        tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
+                        return@runOnUiThread
+                    }
+                }
+                isPhase2 = false
+                GroupJoinerService.serviceInstance?.clearMessageMode()
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
             return
@@ -352,6 +371,44 @@ class MainActivity : AppCompatActivity() {
         updateLinkStatus(currentIndex, status)
         addToHistory(link, status)
         scheduleNext()
+    }
+
+    private fun startPhase2(message: String) {
+        phase2Links = linkItems
+            .filter { it.status == "joined" }
+            .map { it.url }
+            .toMutableList()
+
+        if (phase2Links.isEmpty()) return
+
+        isPhase2 = true
+        GroupJoinerService.serviceInstance?.setMessageMode(message)
+
+        linkList = phase2Links
+        linkItems.clear()
+        linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
+        linkAdapter.notifyDataSetChanged()
+        tvLinkListTitle.text = "💬 Enviando mensagens (${linkList.size})"
+
+        currentIndex = 0
+        processed = false
+        isPaused = false
+        isRunning = true
+        failedLinks.clear()
+        btnStart.isEnabled = false
+        btnPause.visibility = View.VISIBLE
+        btnRetry.visibility = View.GONE
+        progressBar.max = linkList.size
+        progressBar.progress = 0
+        tvProgress.text = "0/${linkList.size}"
+        tvCountdown.text = ""
+
+        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+        wakeLock?.release()
+        wakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
+        wakeLock?.acquire(60 * 60 * 1000L)
+
+        openNextLink()
     }
 
     private fun updateLinkStatus(index: Int, status: String) {

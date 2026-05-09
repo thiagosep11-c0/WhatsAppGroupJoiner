@@ -241,6 +241,31 @@
 
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="💬 Enviar mensagem após entrar"
+                    android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
+                <Switch android:id="@+id/switchSendMessage" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:checked="false"/>
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/etMessage"
+                android:layout_width="match_parent"
+                android:layout_height="100dp"
+                android:hint="Mensagem que será enviada em cada grupo..."
+                android:gravity="top"
+                android:inputType="textMultiLine"
+                android:background="@drawable/edittext_border"
+                android:padding="10dp"
+                android:textSize="13sp"
+                android:layout_marginBottom="16dp"/>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
                 android:layout_marginBottom="12dp">
                 <TextView android:layout_width="0dp" android:layout_height="wrap_content"
                     android:layout_weight="1" android:text="🌙 Modo Escuro"

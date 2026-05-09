@@ -11,6 +11,8 @@ class GroupJoinerService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var isActive = false
+    private var isSendingMessage = false
+    private var messageToSend = ""
     private var timeoutRunnable: Runnable? = null
     private var checkRunnable: Runnable? = null
 
@@ -26,6 +28,16 @@ class GroupJoinerService : AccessibilityService() {
     // Não usamos eventos — usamos polling
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
+
+    fun setMessageMode(message: String) {
+        isSendingMessage = true
+        messageToSend = message
+    }
+
+    fun clearMessageMode() {
+        isSendingMessage = false
+        messageToSend = ""
+    }
 
     fun setWaiting(waiting: Boolean) {
         isActive = waiting
@@ -117,6 +129,63 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     // Percorre toda a árvore procurando botões com palavras-chave
+    private fun tryTypeAndSend(root: AccessibilityNodeInfo): String {
+        // Procura campo de texto do grupo (caixa de mensagem)
+        val inputHints = listOf("mensagem", "message", "digite", "type", "escreva")
+        val allNodes = mutableListOf<AccessibilityNodeInfo>()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            allNodes.add(node)
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+        }
+
+        // Tenta achar campo editável
+        val inputNode = allNodes.firstOrNull { node ->
+            node.isEditable && (
+                inputHints.any { (node.hint?.toString() ?: "").lowercase().contains(it) } ||
+                inputHints.any { (node.contentDescription?.toString() ?: "").lowercase().contains(it) } ||
+                node.className?.toString()?.contains("EditText") == true
+            )
+        }
+
+        if (inputNode != null) {
+            // Clica no campo
+            inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            // Digita a mensagem
+            val args = android.os.Bundle()
+            args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
+            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+
+            // Aguarda 1s e procura botão enviar
+            handler.postDelayed({
+                val root2 = rootInActiveWindow ?: return@postDelayed
+                // Procura botão de enviar
+                val sendQueue = ArrayDeque<AccessibilityNodeInfo>()
+                sendQueue.add(root2)
+                var sent = false
+                while (sendQueue.isNotEmpty() && !sent) {
+                    val node = sendQueue.removeFirst()
+                    val cd = (node.contentDescription?.toString() ?: "").lowercase()
+                    val txt = (node.text?.toString() ?: "").lowercase()
+                    if (node.isClickable && (cd.contains("enviar") || cd.contains("send") || cd.contains("send message"))) {
+                        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        sent = true
+                    }
+                    for (i in 0 until node.childCount) node.getChild(i)?.let { sendQueue.add(it) }
+                }
+                root2.recycle()
+            }, 1000L)
+
+            allNodes.forEach { it.recycle() }
+            return "joined"
+        }
+
+        allNodes.forEach { it.recycle() }
+        return "not_found"
+    }
+
     private fun scanAllClickable(root: AccessibilityNodeInfo): String {
         val joinKeywords = listOf("entrar", "join", "participar", "enter")
         val requestKeywords = listOf("pedido", "request", "solicitar", "pedir")
