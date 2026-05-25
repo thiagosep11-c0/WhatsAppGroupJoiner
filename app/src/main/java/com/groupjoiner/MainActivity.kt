@@ -327,6 +327,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 isPhase2 = false
                 GroupJoinerService.serviceInstance?.clearMessageMode()
+                ForegroundService.stop(this)
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
             return
@@ -516,6 +517,7 @@ class MainActivity : AppCompatActivity() {
         instance = null
         wakeLock?.release()
         wakeLock = null
+        if (!isRunning) ForegroundService.stop(this)
         countdownRunnable?.let { handler.removeCallbacks(it) }
         handler.removeCallbacksAndMessages(null)
     }
