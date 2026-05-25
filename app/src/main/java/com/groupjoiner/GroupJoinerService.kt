@@ -2,6 +2,7 @@ package com.groupjoiner
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
@@ -25,9 +26,23 @@ class GroupJoinerService : AccessibilityService() {
         serviceInstance = this
     }
 
-    // Não usamos eventos — usamos polling
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
+
+    fun setWaiting(waiting: Boolean) {
+        isActive = waiting
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
+        checkRunnable?.let { handler.removeCallbacks(it) }
+
+        if (waiting) {
+            val delay = if (isSendingMessage) 4000L else 5000L
+            scheduleCheck(delay, 1)
+            timeoutRunnable = Runnable {
+                if (isActive) finishWithBack("invalid")
+            }
+            handler.postDelayed(timeoutRunnable!!, 25_000L)
+        }
+    }
 
     fun setMessageMode(message: String) {
         isSendingMessage = true
@@ -37,22 +52,6 @@ class GroupJoinerService : AccessibilityService() {
     fun clearMessageMode() {
         isSendingMessage = false
         messageToSend = ""
-    }
-
-    fun setWaiting(waiting: Boolean) {
-        isActive = waiting
-        timeoutRunnable?.let { handler.removeCallbacks(it) }
-        checkRunnable?.let { handler.removeCallbacks(it) }
-
-        if (waiting) {
-            scheduleCheck(5000L, 1)
-
-            // Timeout geral de 25s
-            timeoutRunnable = Runnable {
-                if (isActive) finishWithBack("invalid")
-            }
-            handler.postDelayed(timeoutRunnable!!, 25_000L)
-        }
     }
 
     private fun scheduleCheck(delayMs: Long, attempt: Int) {
@@ -77,16 +76,21 @@ class GroupJoinerService : AccessibilityService() {
             return
         }
 
-        val status = detectAndAct(root)
+        val status = if (isSendingMessage) {
+            tryTypeAndSendMessage(root)
+        } else {
+            detectAndAct(root)
+        }
         root.recycle()
 
         when (status) {
-            "joined", "requested", "pending", "already_member" -> {
+            "joined", "requested", "pending", "already_member", "message_sent", "message_failed" -> {
                 isActive = false
                 timeoutRunnable?.let { handler.removeCallbacks(it) }
                 checkRunnable?.let { handler.removeCallbacks(it) }
-                handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 1000L)
-                handler.postDelayed({ returnToApp(status) }, 2000L)
+                val finalStatus = if (status == "message_sent") "joined" else if (status == "message_failed") "invalid" else status
+                handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
+                handler.postDelayed({ returnToApp(finalStatus) }, 1800L)
             }
             else -> {
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
@@ -95,18 +99,83 @@ class GroupJoinerService : AccessibilityService() {
         }
     }
 
+    // Fase 2: digitar e enviar mensagem no chat do grupo
+    private fun tryTypeAndSendMessage(root: AccessibilityNodeInfo): String {
+        // Procura campo de texto do chat (EditText)
+        val inputNode = findEditText(root)
+
+        if (inputNode == null) {
+            // Chat ainda não carregou, tenta de novo
+            return "not_found"
+        }
+
+        // Clica no campo
+        inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+
+        // Digita a mensagem
+        val args = Bundle()
+        args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
+        inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        inputNode.recycle()
+
+        // Aguarda 1.5s e pressiona enviar
+        handler.postDelayed({
+            val root2 = rootInActiveWindow ?: return@postDelayed
+            val sent = clickSendButton(root2)
+            root2.recycle()
+            if (!sent) {
+                // Tenta pressionar Enter como fallback
+                val root3 = rootInActiveWindow ?: return@postDelayed
+                val inputNode2 = findEditText(root3)
+                inputNode2?.performAction(AccessibilityNodeInfo.ACTION_NEXT_AT_MOVEMENT_GRANULARITY)
+                inputNode2?.recycle()
+                root3.recycle()
+            }
+        }, 1500L)
+
+        return "message_sent"
+    }
+
+    private fun findEditText(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            if (node.isEditable && node.className?.toString()?.contains("EditText") == true) {
+                queue.forEach { it.recycle() }
+                return node
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+        }
+        return null
+    }
+
+    private fun clickSendButton(root: AccessibilityNodeInfo): Boolean {
+        val sendKeywords = listOf("enviar", "send", "send message", "enviar mensagem")
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        while (queue.isNotEmpty()) {
+            val node = queue.removeFirst()
+            val cd = (node.contentDescription?.toString() ?: "").lowercase()
+            val txt = (node.text?.toString() ?: "").lowercase()
+            if (node.isClickable && sendKeywords.any { cd.contains(it) || txt.contains(it) }) {
+                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                queue.forEach { it.recycle() }
+                return true
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+        }
+        return false
+    }
+
+    // Fase 1: detectar e clicar em Entrar/Enviar pedido
     private fun detectAndAct(root: AccessibilityNodeInfo): String {
-        // 1. Já é membro
-        for (t in listOf("você já é membro", "you're already a member", "já participa", "already a participant")) {
+        for (t in listOf("voce ja e membro", "you're already a member", "ja participa", "already a participant")) {
             if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "already_member"
         }
-
-        // 2. Pedido já enviado
-        for (t in listOf("cancelar pedido", "cancel request", "cancelar solicitação", "withdraw request", "pedido enviado", "request sent")) {
+        for (t in listOf("cancelar pedido", "cancel request", "cancelar solicitacao", "withdraw request", "pedido enviado", "request sent")) {
             if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "pending"
         }
-
-        // 3. Botão Entrar — busca por texto exato
         for (t in listOf("entrar no grupo", "join group", "entrar", "join")) {
             val nodes = root.findAccessibilityNodeInfosByText(t)
             for (node in nodes) {
@@ -114,8 +183,6 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
-
-        // 4. Botão Enviar Pedido — busca por texto exato
         for (t in listOf("enviar pedido", "send request", "solicitar", "request to join", "pedir para entrar")) {
             val nodes = root.findAccessibilityNodeInfosByText(t)
             for (node in nodes) {
@@ -123,116 +190,42 @@ class GroupJoinerService : AccessibilityService() {
                 node.recycle()
             }
         }
-
-        // 5. Busca ampla — percorre TODOS os nós clicáveis da tela
         return scanAllClickable(root)
     }
 
-    // Percorre toda a árvore procurando botões com palavras-chave
-    private fun tryTypeAndSend(root: AccessibilityNodeInfo): String {
-        // Procura campo de texto do grupo (caixa de mensagem)
-        val inputHints = listOf("mensagem", "message", "digite", "type", "escreva")
-        val allNodes = mutableListOf<AccessibilityNodeInfo>()
-        val queue = ArrayDeque<AccessibilityNodeInfo>()
-        queue.add(root)
-        while (queue.isNotEmpty()) {
-            val node = queue.removeFirst()
-            allNodes.add(node)
-            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
-        }
-
-        // Tenta achar campo editável
-        val inputNode = allNodes.firstOrNull { node ->
-            node.isEditable && (
-                inputHints.any { (node.contentDescription?.toString() ?: "").lowercase().contains(it) } ||
-                inputHints.any { (node.text?.toString() ?: "").lowercase().contains(it) } ||
-                node.className?.toString()?.contains("EditText") == true
-            )
-        }
-
-        if (inputNode != null) {
-            // Clica no campo
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            // Digita a mensagem
-            val args = android.os.Bundle()
-            args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-
-            // Aguarda 1s e procura botão enviar
-            handler.postDelayed({
-                val root2 = rootInActiveWindow ?: return@postDelayed
-                // Procura botão de enviar
-                val sendQueue = ArrayDeque<AccessibilityNodeInfo>()
-                sendQueue.add(root2)
-                var sent = false
-                while (sendQueue.isNotEmpty() && !sent) {
-                    val node = sendQueue.removeFirst()
-                    val cd = (node.contentDescription?.toString() ?: "").lowercase()
-                    val txt = (node.text?.toString() ?: "").lowercase()
-                    if (node.isClickable && (cd.contains("enviar") || cd.contains("send") || cd.contains("send message"))) {
-                        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        sent = true
-                    }
-                    for (i in 0 until node.childCount) node.getChild(i)?.let { sendQueue.add(it) }
-                }
-                root2.recycle()
-            }, 1000L)
-
-            allNodes.forEach { it.recycle() }
-            return "joined"
-        }
-
-        allNodes.forEach { it.recycle() }
-        return "not_found"
-    }
-
     private fun scanAllClickable(root: AccessibilityNodeInfo): String {
-        val joinKeywords = listOf("entrar", "join", "participar", "enter")
-        val requestKeywords = listOf("pedido", "request", "solicitar", "pedir")
-
+        val joinKw = listOf("entrar", "join", "participar")
+        val requestKw = listOf("pedido", "request", "solicitar", "pedir")
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(root)
-
         while (queue.isNotEmpty()) {
             val node = queue.removeFirst()
             val text = (node.text?.toString() ?: "").lowercase()
             val desc = (node.contentDescription?.toString() ?: "").lowercase()
             val combined = "$text $desc"
-
             if (node.isClickable && combined.isNotBlank()) {
                 when {
-                    joinKeywords.any { combined.contains(it) } -> {
+                    joinKw.any { combined.contains(it) } -> {
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                        // reciclar filhos da fila
                         queue.forEach { it.recycle() }
                         return "joined"
                     }
-                    requestKeywords.any { combined.contains(it) } -> {
+                    requestKw.any { combined.contains(it) } -> {
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                         queue.forEach { it.recycle() }
                         return "requested"
                     }
                 }
             }
-
-            for (i in 0 until node.childCount) {
-                node.getChild(i)?.let { queue.add(it) }
-            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
         }
         return "not_found"
     }
 
     private fun tryClick(node: AccessibilityNodeInfo): Boolean {
-        if (node.isClickable) {
-            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            return true
-        }
+        if (node.isClickable) { node.performAction(AccessibilityNodeInfo.ACTION_CLICK); return true }
         val p = node.parent
-        if (p?.isClickable == true) {
-            p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            p.recycle()
-            return true
-        }
+        if (p?.isClickable == true) { p.performAction(AccessibilityNodeInfo.ACTION_CLICK); p.recycle(); return true }
         return false
     }
 
@@ -251,7 +244,12 @@ class GroupJoinerService : AccessibilityService() {
             intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
             intent?.let { startActivity(it) }
         } catch (e: Exception) { }
-        handler.postDelayed({ MainActivity.instance?.onGroupProcessed(status) }, 600L)
+        try {
+            val intent = Intent(applicationContext, MainActivity::class.java)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            startActivity(intent)
+        } catch (e: Exception) { }
+        handler.postDelayed({ MainActivity.instance?.onGroupProcessed(status) }, 800L)
     }
 
     override fun onDestroy() {
