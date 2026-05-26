@@ -126,7 +126,8 @@ class GroupJoinerService : AccessibilityService() {
         isActive = false
         cancelAll()
         try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (e: Exception) {}
-        handler.postDelayed({ returnToApp(status) }, 1200L)
+        handler.postDelayed({ try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (e: Exception) {} }, 800L)
+        handler.postDelayed({ returnToApp(status) }, 1600L)
     }
 
     private fun returnToApp(status: String) {
