@@ -73,6 +73,7 @@ class MainActivity : AppCompatActivity() {
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
     private var isCheckingApproval = false
+    private var isLeavingGroup = false
     private var approvalCheckRunnable: Runnable? = null
     private var autoCheckIntervalMs = 30 * 60 * 1000L // 30 minutos padrão
 
@@ -355,8 +356,10 @@ class MainActivity : AppCompatActivity() {
                 wakeLock = null
                 isPhase2 = false
                 isCheckingApproval = false
+                isLeavingGroup = false
                 GroupJoinerService.serviceInstance?.clearMessageMode()
                 GroupJoinerService.serviceInstance?.setCheckApproval(false)
+                GroupJoinerService.serviceInstance?.setLeaveMode(false)
                 ForegroundService.stop(this)
                 StorageManager.clearResumeState(this)
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
@@ -421,6 +424,17 @@ class MainActivity : AppCompatActivity() {
                 HistoryManager.pendingLinks.remove(link)
                 updateLinkStatus(currentIndex, "invalid")
                 addToHistory(link, status)
+            }
+            "admin_only" -> {
+                // Admin sem envio — adiciona nos falhos para retentar (vai sair do grupo)
+                failedLinks.add(Pair(currentIndex, link))
+                updateLinkStatus(currentIndex, "admin_only")
+                addToHistory(link, "admin_only")
+            }
+            "left_group" -> {
+                // Saiu do grupo com sucesso
+                updateLinkStatus(currentIndex, "left_group")
+                addToHistory(link, "left_group")
             }
             else -> {
                 updateLinkStatus(currentIndex, status)

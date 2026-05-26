@@ -50,6 +50,16 @@ class LinkAdapter(private val items: MutableList<LinkItem>) :
                 h.tvStatus.setTextColor(Color.parseColor("#6A1B9A"))
                 h.itemView.setBackgroundColor(Color.parseColor("#F3E5F5"))
             }
+            "admin_only" -> {
+                h.tvStatus.text = "👑 Admin - Sem envio"
+                h.tvStatus.setTextColor(Color.parseColor("#E65100"))
+                h.itemView.setBackgroundColor(Color.parseColor("#FFF3E0"))
+            }
+            "left_group" -> {
+                h.tvStatus.text = "🚪 Admin - Saiu"
+                h.tvStatus.setTextColor(Color.parseColor("#455A64"))
+                h.itemView.setBackgroundColor(Color.parseColor("#ECEFF1"))
+            }
             "requested" -> {
                 h.tvStatus.text = if (item.countdown.isNotEmpty()) "⏱ ${item.countdown}" else "⏳ Aguard. aprovação"
                 h.tvStatus.setTextColor(Color.parseColor("#1565C0"))

@@ -221,7 +221,26 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun trySendMessage(root: AccessibilityNodeInfo): String {
         return try {
-            val inputNode = findEditText(root) ?: return "not_found"
+            // Detectar se só admin pode enviar
+            val adminTexts = listOf(
+                "so administradores", "only admins", "apenas administradores",
+                "admins can send", "somente administradores", "admin only",
+                "so adm", "only administrators"
+            )
+            for (t in adminTexts) {
+                if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "admin_only"
+            }
+            // Detectar campo desabilitado (campo existe mas nao é editável)
+            val inputNode = findEditText(root)
+            if (inputNode == null) {
+                // Verifica se tem campo mas desabilitado
+                val disabledInput = findDisabledInput(root)
+                if (disabledInput != null) {
+                    safeRecycle(disabledInput)
+                    return "admin_only"
+                }
+                return "not_found"
+            }
             inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             val args = Bundle()
             args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
@@ -284,6 +303,90 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     // --- Helpers ---
+
+    private fun findDisabledInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        return try {
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            while (queue.isNotEmpty()) {
+                val node = queue.removeFirst()
+                if (!node.isEnabled && node.className?.toString()?.contains("EditText") == true) {
+                    queue.forEach { safeRecycle(it) }
+                    return node
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+            }
+            null
+        } catch (e: Exception) { null }
+    }
+
+    // Sair do grupo: abre menu e clica em Sair
+    var isSilentLeave = false
+
+    fun setLeaveMode(leave: Boolean) {
+        isSilentLeave = leave
+    }
+
+    private fun tryLeaveGroup(root: AccessibilityNodeInfo): String {
+        return try {
+            // Procura botão de menu (3 pontinhos)
+            val menuKw = listOf("mais opcoes", "more options", "menu", "opcoes")
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            var found = false
+            while (queue.isNotEmpty() && !found) {
+                val node = queue.removeFirst()
+                val cd = (node.contentDescription?.toString() ?: "").lowercase()
+                if (node.isClickable && menuKw.any { cd.contains(it) }) {
+                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    queue.forEach { safeRecycle(it) }
+                    found = true
+                    break
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+            }
+            if (!found) return "not_found"
+
+            // Aguarda menu abrir e clica em Sair do grupo
+            handler.postDelayed({
+                try {
+                    val root2 = rootInActiveWindow ?: return@postDelayed
+                    for (t in listOf("sair do grupo", "exit group", "leave group")) {
+                        val nodes = root2.findAccessibilityNodeInfosByText(t)
+                        for (node in nodes) {
+                            if (node.isClickable) {
+                                node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                safeRecycle(node)
+                                // Confirmar saída
+                                handler.postDelayed({
+                                    try {
+                                        val root3 = rootInActiveWindow ?: return@postDelayed
+                                        for (t2 in listOf("sair", "exit", "leave", "confirmar", "ok")) {
+                                            val nodes2 = root3.findAccessibilityNodeInfosByText(t2)
+                                            for (n2 in nodes2) {
+                                                if (n2.isClickable) {
+                                                    n2.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                                                    safeRecycle(n2)
+                                                    break
+                                                }
+                                                safeRecycle(n2)
+                                            }
+                                        }
+                                        safeRecycle(root3)
+                                    } catch (e: Exception) {}
+                                }, 1000L)
+                                break
+                            }
+                            safeRecycle(node)
+                        }
+                    }
+                    safeRecycle(root2)
+                } catch (e: Exception) {}
+            }, 1500L)
+
+            "left_group"
+        } catch (e: Exception) { "not_found" }
+    }
 
     private fun findEditText(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         return try {
