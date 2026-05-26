@@ -36,6 +36,22 @@ data class HistoryEntry(
 
 object HistoryManager {
     val entries = mutableListOf<HistoryEntry>()
-    fun add(entry: HistoryEntry) { entries.add(0, entry) }
-    fun clear() { entries.clear() }
+    val pendingLinks = mutableListOf<String>() // grupos com pedido enviado
+
+    fun add(entry: HistoryEntry) {
+        entries.add(0, entry)
+        // Adiciona à lista de pendentes se for pedido enviado
+        if (entry.status == "requested" && !pendingLinks.contains(entry.link)) {
+            pendingLinks.add(entry.link)
+        }
+        // Remove dos pendentes se foi aprovado
+        if (entry.status == "joined") {
+            pendingLinks.remove(entry.link)
+        }
+    }
+
+    fun clear() {
+        entries.clear()
+        pendingLinks.clear()
+    }
 }

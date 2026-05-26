@@ -67,8 +67,14 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchNotifications: Switch
     private lateinit var switchSendMessage: Switch
     private lateinit var etMessage: EditText
+    private lateinit var switchAutoCheck: Switch
+    private lateinit var etCheckInterval: EditText
+    private lateinit var btnCheckNow: Button
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
+    private var isCheckingApproval = false
+    private var approvalCheckRunnable: Runnable? = null
+    private var autoCheckIntervalMs = 30 * 60 * 1000L // 30 minutos padrão
 
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
@@ -134,6 +140,9 @@ class MainActivity : AppCompatActivity() {
         switchNotifications = findViewById(R.id.switchNotifications)
         switchSendMessage = findViewById(R.id.switchSendMessage)
         etMessage = findViewById(R.id.etMessage)
+        switchAutoCheck = findViewById(R.id.switchAutoCheck)
+        etCheckInterval = findViewById(R.id.etCheckInterval)
+        btnCheckNow = findViewById(R.id.btnCheckNow)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -229,6 +238,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         switchDarkMode.setOnCheckedChangeListener { _, checked -> applyTheme(checked) }
+
+        btnCheckNow.setOnClickListener { startApprovalCheck() }
+
+        switchAutoCheck.setOnCheckedChangeListener { _, checked ->
+            if (checked) scheduleAutoCheck()
+            else stopAutoCheck()
+        }
     }
 
     private fun updateLinkCount() {
@@ -326,7 +342,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 isPhase2 = false
+                isCheckingApproval = false
                 GroupJoinerService.serviceInstance?.clearMessageMode()
+                GroupJoinerService.serviceInstance?.setCheckingApproval(false)
                 ForegroundService.stop(this)
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
@@ -368,10 +386,88 @@ class MainActivity : AppCompatActivity() {
         processed = true
 
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
-        if (status == "invalid") failedLinks.add(Pair(currentIndex, link))
-        updateLinkStatus(currentIndex, status)
-        addToHistory(link, status)
+
+        when (status) {
+            "approved" -> {
+                HistoryManager.pendingLinks.remove(link)
+                updateLinkStatus(currentIndex, "joined")
+                addToHistory(link, "joined")
+                runOnUiThread {
+                    Toast.makeText(this, "Pedido aprovado! Grupo ${currentIndex + 1}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            "still_pending" -> {
+                updateLinkStatus(currentIndex, "requested")
+            }
+            "invalid" -> {
+                failedLinks.add(Pair(currentIndex, link))
+                HistoryManager.pendingLinks.remove(link)
+                updateLinkStatus(currentIndex, "invalid")
+                addToHistory(link, status)
+            }
+            else -> {
+                updateLinkStatus(currentIndex, status)
+                addToHistory(link, status)
+            }
+        }
         scheduleNext()
+    }
+
+    private fun scheduleAutoCheck() {
+        stopAutoCheck()
+        val intervalMin = etCheckInterval.text.toString().toLongOrNull() ?: 30
+        autoCheckIntervalMs = intervalMin * 60 * 1000L
+        approvalCheckRunnable = object : Runnable {
+            override fun run() {
+                if (HistoryManager.pendingLinks.isNotEmpty() && !isRunning) {
+                    startApprovalCheck()
+                }
+                handler.postDelayed(this, autoCheckIntervalMs)
+            }
+        }
+        handler.postDelayed(approvalCheckRunnable!!, autoCheckIntervalMs)
+        Toast.makeText(this, "Verificacao automatica ativa a cada ${intervalMin}min", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopAutoCheck() {
+        approvalCheckRunnable?.let { handler.removeCallbacks(it) }
+        approvalCheckRunnable = null
+    }
+
+    private fun startApprovalCheck() {
+        val pending = HistoryManager.pendingLinks.toMutableList()
+        if (pending.isEmpty()) {
+            Toast.makeText(this, "Nenhum pedido pendente!", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (isRunning) {
+            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isCheckingApproval = true
+        GroupJoinerService.serviceInstance?.setCheckingApproval(true)
+
+        linkList = pending
+        linkItems.clear()
+        linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
+        linkAdapter.notifyDataSetChanged()
+        tvLinkListTitle.text = "Verificando aprovacoes (${linkList.size})"
+
+        currentIndex = 0
+        processed = false
+        isPaused = false
+        isRunning = true
+        failedLinks.clear()
+        btnStart.isEnabled = false
+        btnPause.visibility = View.VISIBLE
+        btnRetry.visibility = View.GONE
+        progressBar.max = linkList.size
+        progressBar.progress = 0
+        tvProgress.text = "0/${linkList.size}"
+        tvCountdown.text = ""
+        ForegroundService.start(this)
+        openNextLink()
     }
 
     private fun startPhase2(message: String) {

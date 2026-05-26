@@ -54,6 +54,13 @@ class GroupJoinerService : AccessibilityService() {
         messageToSend = ""
     }
 
+    // Modo verificação — checa se pedido foi aprovado
+    var isCheckingApproval = false
+
+    fun setCheckingApproval(checking: Boolean) {
+        isCheckingApproval = checking
+    }
+
     private fun scheduleCheck(delayMs: Long, attempt: Int) {
         checkRunnable?.let { handler.removeCallbacks(it) }
         checkRunnable = Runnable { tryActOnScreen(attempt) }
@@ -76,19 +83,26 @@ class GroupJoinerService : AccessibilityService() {
             return
         }
 
-        val status = if (isSendingMessage) {
-            tryTypeAndSendMessage(root)
-        } else {
-            detectAndAct(root)
+        val status = when {
+            isSendingMessage -> tryTypeAndSendMessage(root)
+            isCheckingApproval -> checkIfApproved(root)
+            else -> detectAndAct(root)
         }
         root.recycle()
 
         when (status) {
-            "joined", "requested", "pending", "already_member", "message_sent", "message_failed" -> {
+            "joined", "requested", "pending", "already_member", "message_sent", "message_failed",
+            "approved", "still_pending" -> {
                 isActive = false
                 timeoutRunnable?.let { handler.removeCallbacks(it) }
                 checkRunnable?.let { handler.removeCallbacks(it) }
-                val finalStatus = if (status == "message_sent") "joined" else if (status == "message_failed") "invalid" else status
+                val finalStatus = when (status) {
+                    "message_sent" -> "joined"
+                    "message_failed" -> "invalid"
+                    "approved" -> "approved"
+                    "still_pending" -> "still_pending"
+                    else -> status
+                }
                 handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
                 handler.postDelayed({ returnToApp(finalStatus) }, 1800L)
             }
@@ -97,6 +111,24 @@ class GroupJoinerService : AccessibilityService() {
                 else finishWithBack("invalid")
             }
         }
+    }
+
+    // Verificação de aprovação: checa se pedido pendente foi aceito
+    private fun checkIfApproved(root: AccessibilityNodeInfo): String {
+        // Se achar campo de texto do chat = foi aprovado e está no grupo
+        val inputNode = findEditText(root)
+        if (inputNode != null) {
+            inputNode.recycle()
+            return "approved" // foi aprovado!
+        }
+
+        // Se ainda mostrar cancelar pedido = ainda pendente
+        for (t in listOf("cancelar pedido", "cancel request", "withdraw request")) {
+            if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "still_pending"
+        }
+
+        // Link inválido ou expirado
+        return "not_found"
     }
 
     // Fase 2: digitar e enviar mensagem no chat do grupo

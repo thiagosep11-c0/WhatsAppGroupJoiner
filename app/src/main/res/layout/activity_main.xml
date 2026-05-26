@@ -239,6 +239,46 @@
             <View android:layout_width="match_parent" android:layout_height="1dp"
                 android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
 
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="🔍 Verificar pedidos aprovados"
+                android:textSize="14sp" android:textStyle="bold"
+                android:textColor="#333333" android:layout_marginBottom="8dp"/>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Verificar automaticamente"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <Switch android:id="@+id/switchAutoCheck"
+                    android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Intervalo (minutos)"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <EditText android:id="@+id/etCheckInterval"
+                    android:layout_width="80dp" android:layout_height="wrap_content"
+                    android:inputType="number" android:text="30"
+                    android:background="@drawable/edittext_border" android:padding="8dp"
+                    android:textSize="13sp" android:gravity="center"/>
+            </LinearLayout>
+
+            <Button android:id="@+id/btnCheckNow"
+                android:layout_width="match_parent" android:layout_height="44dp"
+                android:text="🔍 Verificar Agora"
+                android:backgroundTint="#1565C0" android:textColor="#FFFFFF"
+                android:textSize="13sp" android:layout_marginBottom="16dp"/>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical"
                 android:layout_marginBottom="8dp">
