@@ -102,6 +102,13 @@ class MainActivity : AppCompatActivity() {
         bindViews()
         setupTabs()
         setupButtons()
+        // Carregar histórico e pendentes salvos
+        StorageManager.loadHistory(this)
+        StorageManager.loadPendingLinks(this)
+        historyAdapter.notifyDataSetChanged()
+        updateHistoryCount()
+        // Verificar se há processo para retomar
+        checkResumeState()
     }
 
     private fun bindViews() {
@@ -234,6 +241,7 @@ class MainActivity : AppCompatActivity() {
                     HistoryManager.clear()
                     historyAdapter.notifyDataSetChanged()
                     updateHistoryCount()
+                    StorageManager.clearAll(this)
                 }.setNegativeButton("Cancelar", null).show()
         }
 
@@ -347,6 +355,7 @@ class MainActivity : AppCompatActivity() {
                 GroupJoinerService.serviceInstance?.clearMessageMode()
                 GroupJoinerService.serviceInstance?.setCheckApproval(false)
                 ForegroundService.stop(this)
+                StorageManager.clearResumeState(this)
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
             return
@@ -385,6 +394,9 @@ class MainActivity : AppCompatActivity() {
     fun onGroupProcessed(status: String) {
         if (processed) return
         processed = true
+        // Salvar estado atual para retomada
+        StorageManager.saveResumeState(this, linkList, currentIndex + 1,
+            MainActivity.selectedPackage, etMessage.text.toString().trim())
 
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
 
@@ -413,6 +425,32 @@ class MainActivity : AppCompatActivity() {
             }
         }
         scheduleNext()
+    }
+
+    private fun checkResumeState() {
+        val state = StorageManager.loadResumeState(this) ?: return
+        val remaining = state.links.size - state.index
+        if (remaining <= 0) { StorageManager.clearResumeState(this); return }
+
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Continuar de onde parou?")
+            .setMessage("Havia um processo em andamento com $remaining grupos restantes. Deseja continuar?")
+            .setPositiveButton("Continuar") { _, _ ->
+                // Restaurar estado
+                MainActivity.selectedPackage = state.pkg
+                if (state.pkg == "com.whatsapp.w4b") radioBusiness.isChecked = true
+                else radioNormal.isChecked = true
+                if (state.message.isNotEmpty()) {
+                    etMessage.setText(state.message)
+                    switchSendMessage.isChecked = true
+                }
+                val remainingLinks = state.links.subList(state.index, state.links.size).toMutableList()
+                startProcessing(remainingLinks)
+            }
+            .setNegativeButton("Nao") { _, _ ->
+                StorageManager.clearResumeState(this)
+            }
+            .show()
     }
 
     private fun scheduleAutoCheck() {
@@ -567,6 +605,9 @@ class MainActivity : AppCompatActivity() {
         val entry = HistoryEntry(number = currentIndex, link = link, status = status)
         HistoryManager.add(entry)
         runOnUiThread { historyAdapter.notifyItemInserted(0); updateHistoryCount() }
+        // Persistir histórico e pendentes
+        StorageManager.saveHistory(this)
+        StorageManager.savePendingLinks(this)
     }
 
     private fun updateHistoryCount() {
