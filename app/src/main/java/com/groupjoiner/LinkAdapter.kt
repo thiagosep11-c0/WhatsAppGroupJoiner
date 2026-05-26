@@ -46,7 +46,7 @@ class LinkAdapter(private val items: MutableList<LinkItem>) :
                 h.itemView.setBackgroundColor(Color.parseColor("#E8F5E9"))
             }
             "requested" -> {
-                h.tvStatus.text = "⏳ Pedido enviado"
+                h.tvStatus.text = if (item.countdown.isNotEmpty()) "⏱ ${item.countdown}" else "⏳ Aguard. aprovação"
                 h.tvStatus.setTextColor(Color.parseColor("#1565C0"))
                 h.itemView.setBackgroundColor(Color.parseColor("#E3F2FD"))
             }

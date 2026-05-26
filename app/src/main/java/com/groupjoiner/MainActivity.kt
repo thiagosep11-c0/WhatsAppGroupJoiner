@@ -393,10 +393,11 @@ class MainActivity : AppCompatActivity() {
                 updateLinkStatus(currentIndex, "joined")
                 addToHistory(link, "joined")
                 runOnUiThread {
-                    Toast.makeText(this, "Pedido aprovado! Grupo ${currentIndex + 1}", Toast.LENGTH_SHORT).show()
+                    tvCountdown.text = "✅ Aprovado! Grupo ${currentIndex + 1}"
                 }
             }
             "still_pending" -> {
+                // Mantém como requested na lista
                 updateLinkStatus(currentIndex, "requested")
             }
             "invalid" -> {
@@ -450,9 +451,14 @@ class MainActivity : AppCompatActivity() {
 
         linkList = pending
         linkItems.clear()
-        linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
+        linkList.forEachIndexed { i, url ->
+            linkItems.add(LinkItem(i + 1, url, "requested")) // começa como pendente
+        }
         linkAdapter.notifyDataSetChanged()
-        tvLinkListTitle.text = "Verificando aprovacoes (${linkList.size})"
+        tvLinkListTitle.text = "🔍 Verificando aprovacoes (${linkList.size})"
+
+        // Vai para aba Inicio para acompanhar
+        showTab("home")
 
         currentIndex = 0
         processed = false
