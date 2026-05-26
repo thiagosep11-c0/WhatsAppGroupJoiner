@@ -97,11 +97,11 @@ class GroupJoinerService : AccessibilityService() {
                 timeoutRunnable?.let { handler.removeCallbacks(it) }
                 checkRunnable?.let { handler.removeCallbacks(it) }
                 val finalStatus = when (status) {
-                    "message_sent" -> "joined"
+                    "message_sent"   -> "message_sent"
                     "message_failed" -> "invalid"
-                    "approved" -> "approved"
-                    "still_pending" -> "still_pending"
-                    else -> status
+                    "approved"       -> "approved"
+                    "still_pending"  -> "still_pending"
+                    else             -> status
                 }
                 handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
                 handler.postDelayed({ returnToApp(finalStatus) }, 1800L)

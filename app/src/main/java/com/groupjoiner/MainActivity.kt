@@ -317,11 +317,12 @@ class MainActivity : AppCompatActivity() {
 
         if (currentIndex >= linkList.size) {
             val joined = linkItems.count { it.status == "joined" }
+            val msgSent = linkItems.count { it.status == "message_sent" }
             val requested = linkItems.count { it.status == "requested" }
             val pendingC = linkItems.count { it.status == "pending" }
             val failed = linkItems.count { it.status == "invalid" }
             runOnUiThread {
-                tvCountdown.text = "✅ Concluido!"
+                tvCountdown.text = if (msgSent > 0) "💬 ${msgSent} mensagens enviadas!" else "✅ Concluido!"
                 tvProgress.text = "${linkList.size}/${linkList.size}"
                 progressBar.progress = linkList.size
                 btnStart.isEnabled = true
