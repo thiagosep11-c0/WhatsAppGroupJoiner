@@ -31,6 +31,7 @@ class GroupJoinerService : AccessibilityService() {
 
     fun setWaiting(waiting: Boolean) {
         isActive = waiting
+        hasReturned = false
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         checkRunnable?.let { handler.removeCallbacks(it) }
 
@@ -102,8 +103,8 @@ class GroupJoinerService : AccessibilityService() {
         root.recycle()
 
         when (status) {
-            "joined", "requested", "pending", "already_member", "message_sent", "message_failed",
-            "approved", "still_pending" -> {
+            "joined", "requested", "pending", "already_member", "message_sent",
+            "message_failed", "approved", "still_pending" -> {
                 isActive = false
                 timeoutRunnable?.let { handler.removeCallbacks(it) }
                 checkRunnable?.let { handler.removeCallbacks(it) }
@@ -127,20 +128,31 @@ class GroupJoinerService : AccessibilityService() {
 
     // Verificação de aprovação: checa se pedido pendente foi aceito
     private fun checkIfApproved(root: AccessibilityNodeInfo): String {
-        // Se achar campo de texto do chat = foi aprovado e está no grupo
+        // 1. Se achar campo de texto do chat = foi aprovado
         val inputNode = findEditText(root)
         if (inputNode != null) {
             inputNode.recycle()
-            return "approved" // foi aprovado!
+            return "approved"
         }
 
-        // Se ainda mostrar cancelar pedido = ainda pendente
-        for (t in listOf("cancelar pedido", "cancel request", "withdraw request")) {
+        // 2. Se mostrar cancelar pedido = ainda pendente
+        for (t in listOf("cancelar pedido", "cancel request", "withdraw request", "cancelar solicitacao")) {
             if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "still_pending"
         }
 
-        // Link inválido ou expirado
-        return "not_found"
+        // 3. Se mostrar botão entrar = aprovado mas ainda nao entrou (grupo aberto agora)
+        for (t in listOf("entrar no grupo", "join group")) {
+            if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "still_pending"
+        }
+
+        // 4. Qualquer outro caso = trata como still_pending (nao fecha o app)
+        // Só marca invalid se tiver texto de link inválido
+        for (t in listOf("link invalido", "invalid link", "link expirado", "expired", "nao existe")) {
+            if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "still_pending"
+        }
+
+        // Se nao identificou nada ainda, trata como still_pending para nao crashar
+        return "still_pending"
     }
 
     // Fase 2: digitar e enviar mensagem no chat do grupo
@@ -284,19 +296,23 @@ class GroupJoinerService : AccessibilityService() {
         }, 800L)
     }
 
+    private var hasReturned = false
+
     private fun returnToApp(status: String) {
+        if (hasReturned) return  // evita dupla chamada
+        hasReturned = true
         isActive = false
+
         try {
             val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
             intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
             intent?.let { startActivity(it) }
         } catch (e: Exception) { }
-        try {
-            val intent = Intent(applicationContext, MainActivity::class.java)
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            startActivity(intent)
-        } catch (e: Exception) { }
-        handler.postDelayed({ MainActivity.instance?.onGroupProcessed(status) }, 800L)
+
+        handler.postDelayed({
+            hasReturned = false // reset para próximo grupo
+            MainActivity.instance?.onGroupProcessed(status)
+        }, 800L)
     }
 
     override fun onDestroy() {
