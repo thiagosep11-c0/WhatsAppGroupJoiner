@@ -55,10 +55,10 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     // Modo verificação — checa se pedido foi aprovado
-    var isCheckingApproval = false
+    private var checkingApproval = false
 
-    fun setCheckingApproval(checking: Boolean) {
-        isCheckingApproval = checking
+    fun setCheckApproval(checking: Boolean) {
+        checkingApproval = checking
     }
 
     private fun scheduleCheck(delayMs: Long, attempt: Int) {
@@ -85,7 +85,7 @@ class GroupJoinerService : AccessibilityService() {
 
         val status = when {
             isSendingMessage -> tryTypeAndSendMessage(root)
-            isCheckingApproval -> checkIfApproved(root)
+            checkingApproval -> checkIfApproved(root)
             else -> detectAndAct(root)
         }
         root.recycle()

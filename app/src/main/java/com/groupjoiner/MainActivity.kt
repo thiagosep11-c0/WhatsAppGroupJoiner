@@ -344,7 +344,7 @@ class MainActivity : AppCompatActivity() {
                 isPhase2 = false
                 isCheckingApproval = false
                 GroupJoinerService.serviceInstance?.clearMessageMode()
-                GroupJoinerService.serviceInstance?.setCheckingApproval(false)
+                GroupJoinerService.serviceInstance?.setCheckApproval(false)
                 ForegroundService.stop(this)
                 if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
             }
@@ -446,7 +446,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         isCheckingApproval = true
-        GroupJoinerService.serviceInstance?.setCheckingApproval(true)
+        GroupJoinerService.serviceInstance?.setCheckApproval(true)
 
         linkList = pending
         linkItems.clear()
