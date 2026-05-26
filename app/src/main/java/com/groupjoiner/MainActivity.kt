@@ -676,9 +676,23 @@ class MainActivity : AppCompatActivity() {
         nm.notify(1, notif)
     }
 
+    override fun onPause() {
+        super.onPause()
+        // Salvar tudo ao minimizar
+        StorageManager.saveHistory(this)
+        StorageManager.savePendingLinks(this)
+        if (isRunning) {
+            StorageManager.saveResumeState(this, linkList, currentIndex,
+                selectedPackage, etMessage.text.toString().trim())
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         instance = null
+        // Salvar estado antes de fechar
+        StorageManager.saveHistory(this)
+        StorageManager.savePendingLinks(this)
         wakeLock?.release()
         wakeLock = null
         if (!isRunning) ForegroundService.stop(this)
