@@ -37,10 +37,21 @@ class GroupJoinerService : AccessibilityService() {
         if (waiting) {
             val delay = if (isSendingMessage) 4000L else 5000L
             scheduleCheck(delay, 1)
+
+            // Timeout de 20s — SEMPRE volta pro app, sem exceção
             timeoutRunnable = Runnable {
-                if (isActive) finishWithBack("invalid")
+                if (isActive) {
+                    isActive = false
+                    checkRunnable?.let { handler.removeCallbacks(it) }
+                    // Força back e volta
+                    performGlobalAction(GLOBAL_ACTION_BACK)
+                    handler.postDelayed({
+                        performGlobalAction(GLOBAL_ACTION_BACK) // segundo back por garantia
+                        returnToApp("invalid")
+                    }, 800L)
+                }
             }
-            handler.postDelayed(timeoutRunnable!!, 25_000L)
+            handler.postDelayed(timeoutRunnable!!, 20_000L)
         }
     }
 
@@ -104,7 +115,8 @@ class GroupJoinerService : AccessibilityService() {
                     else             -> status
                 }
                 handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
-                handler.postDelayed({ returnToApp(finalStatus) }, 1800L)
+                handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 1400L) // segundo back
+                handler.postDelayed({ returnToApp(finalStatus) }, 2200L)
             }
             else -> {
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
@@ -266,7 +278,10 @@ class GroupJoinerService : AccessibilityService() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         checkRunnable?.let { handler.removeCallbacks(it) }
         performGlobalAction(GLOBAL_ACTION_BACK)
-        handler.postDelayed({ returnToApp(status) }, 1000L)
+        handler.postDelayed({
+            performGlobalAction(GLOBAL_ACTION_BACK) // segundo back por garantia
+            returnToApp(status)
+        }, 800L)
     }
 
     private fun returnToApp(status: String) {
