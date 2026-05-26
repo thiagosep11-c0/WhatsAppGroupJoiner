@@ -337,19 +337,22 @@ class MainActivity : AppCompatActivity() {
                 btnPause.visibility = View.GONE
                 if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
                 isRunning = false
+                // Verifica se deve iniciar Fase 2 ANTES de liberar wakelock
+                val shouldStartPhase2 = switchSendMessage.isChecked && !isPhase2 && joined > 0
+                val msg = etMessage.text.toString().trim()
+
+                if (shouldStartPhase2 && msg.isNotEmpty()) {
+                    // Mantém WakeLock e ForegroundService ativos para Fase 2
+                    tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
+                    handler.postDelayed({
+                        startPhase2(msg)
+                    }, 3000L)
+                    return@runOnUiThread
+                }
+
+                // Só libera tudo se nao tem Fase 2
                 wakeLock?.release()
                 wakeLock = null
-                // Se ativado envio de mensagem e houve grupos entrados — inicia Fase 2
-                if (switchSendMessage.isChecked && !isPhase2 && joined > 0) {
-                    val msg = etMessage.text.toString().trim()
-                    if (msg.isNotEmpty()) {
-                        handler.postDelayed({
-                            startPhase2(msg)
-                        }, 3000L)
-                        tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
-                        return@runOnUiThread
-                    }
-                }
                 isPhase2 = false
                 isCheckingApproval = false
                 GroupJoinerService.serviceInstance?.clearMessageMode()
@@ -545,10 +548,13 @@ class MainActivity : AppCompatActivity() {
         tvProgress.text = "0/${linkList.size}"
         tvCountdown.text = ""
 
+        // Renovar WakeLock para Fase 2
         val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        wakeLock?.release()
-        wakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
-        wakeLock?.acquire(60 * 60 * 1000L)
+        if (wakeLock?.isHeld == false || wakeLock == null) {
+            wakeLock?.release()
+            wakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
+            wakeLock?.acquire(60 * 60 * 1000L)
+        }
 
         openNextLink()
     }
