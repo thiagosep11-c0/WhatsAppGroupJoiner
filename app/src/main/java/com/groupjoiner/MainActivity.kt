@@ -70,6 +70,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var switchAutoCheck: Switch
     private lateinit var etCheckInterval: EditText
     private lateinit var btnCheckNow: Button
+    private lateinit var switchHumanTyping: Switch
+    private lateinit var etTypingWpm: EditText
+    private lateinit var etPauseMin: EditText
+    private lateinit var etPauseMax: EditText
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
     private var isCheckingApproval = false
@@ -101,6 +105,7 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         createNotificationChannel()
         bindViews()
+        loadTypingSettings()
         setupTabs()
         setupButtons()
         // Carregar histórico e pendentes salvos
@@ -151,6 +156,10 @@ class MainActivity : AppCompatActivity() {
         switchAutoCheck = findViewById(R.id.switchAutoCheck)
         etCheckInterval = findViewById(R.id.etCheckInterval)
         btnCheckNow = findViewById(R.id.btnCheckNow)
+        switchHumanTyping = findViewById(R.id.switchHumanTyping)
+        etTypingWpm = findViewById(R.id.etTypingWpm)
+        etPauseMin = findViewById(R.id.etPauseMin)
+        etPauseMax = findViewById(R.id.etPauseMax)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -380,6 +389,7 @@ class MainActivity : AppCompatActivity() {
             tvCountdown.text = "🔗 Abrindo..."
         }
 
+        refreshWakeLock()
         GroupJoinerService.serviceInstance?.setWaiting(true)
 
         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(link)).apply {
@@ -541,7 +551,8 @@ class MainActivity : AppCompatActivity() {
         if (phase2Links.isEmpty()) return
 
         isPhase2 = true
-        GroupJoinerService.serviceInstance?.setMessageMode(message)
+        saveTypingSettings()
+        GroupJoinerService.serviceInstance?.setMessageMode(message, switchHumanTyping.isChecked, readTypingWpm())
 
         linkList = phase2Links
         linkItems.clear()
@@ -573,6 +584,43 @@ class MainActivity : AppCompatActivity() {
         openNextLink()
     }
 
+    // --- Fase 2: digitação humana e pausa entre grupos (aba Config) ---
+
+    private fun readTypingWpm(): Int =
+        (etTypingWpm.text.toString().trim().toIntOrNull() ?: 70).coerceIn(20, 250)
+
+    private fun readPauseMin(): Int =
+        (etPauseMin.text.toString().trim().toIntOrNull() ?: 8).coerceIn(1, 600)
+
+    private fun readPauseMax(): Int =
+        (etPauseMax.text.toString().trim().toIntOrNull() ?: 20).coerceIn(readPauseMin(), 600)
+
+    private fun loadTypingSettings() {
+        val s = StorageManager.loadTypingSettings(this)
+        switchHumanTyping.isChecked = s.human
+        etTypingWpm.setText(s.wpm.toString())
+        etPauseMin.setText(s.pauseMin.toString())
+        etPauseMax.setText(s.pauseMax.toString())
+    }
+
+    private fun saveTypingSettings() {
+        StorageManager.saveTypingSettings(
+            this, switchHumanTyping.isChecked, readTypingWpm(), readPauseMin(), readPauseMax()
+        )
+    }
+
+    // Processos longos (a fase 2 digitando demora mais): renova a trava de tela a cada grupo para não vencer em 1 h
+    private fun refreshWakeLock() {
+        if (wakeLock == null) return  // só renova quando já existe (criada no startProcessing)
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "OnGroups:WakeLock")
+            wl.acquire(60 * 60 * 1000L)
+            wakeLock = wl
+        } catch (e: Exception) { }
+    }
+
     private fun updateLinkStatus(index: Int, status: String) {
         runOnUiThread {
             if (index < linkItems.size) {
@@ -584,7 +632,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun scheduleNext() {
-        val delay = defaultIntervals[currentIndex % defaultIntervals.size]
+        // Entrar nos grupos: ciclo fixo 5/30/40/50/60 s. Mensagens (fase 2): pausa menor e aleatória (Config)
+        val delay = if (isPhase2) HumanTyping.pauseBetweenGroupsMs(readPauseMin(), readPauseMax())
+                    else defaultIntervals[currentIndex % defaultIntervals.size]
         val nextIdx = currentIndex + 1
         currentIndex++
         runOnUiThread {
@@ -679,6 +729,7 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         // Salvar tudo ao minimizar
+        saveTypingSettings()
         StorageManager.saveHistory(this)
         StorageManager.savePendingLinks(this)
         if (isRunning) {

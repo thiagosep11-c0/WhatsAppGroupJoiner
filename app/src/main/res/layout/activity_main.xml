@@ -216,7 +216,7 @@
                 android:text="⏱ Padrão de intervalos" android:textSize="14sp"
                 android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="Grupo 1 → 5s → Grupo 2 → 30s → Grupo 3 → 40s → Grupo 4 → 50s → Grupo 5 → 60s → repete"
+                android:text="Grupo 1 → 5s → Grupo 2 → 30s → Grupo 3 → 40s → Grupo 4 → 50s → Grupo 5 → 60s → repete&#10;(vale só para ENTRAR nos grupos — as mensagens usam a pausa configurada mais abaixo)"
                 android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5"
                 android:padding="10dp" android:layout_marginBottom="16dp"/>
 
@@ -300,6 +300,51 @@
                 android:padding="10dp"
                 android:textSize="13sp"
                 android:layout_marginBottom="16dp"/>
+
+            <!-- Digitação humana (fase 2) -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="⌨️ Digitar palavra por palavra (como humano)"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <Switch android:id="@+id/switchHumanTyping" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:checked="true"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="8dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Velocidade da digitação (palavras por minuto)"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <EditText android:id="@+id/etTypingWpm"
+                    android:layout_width="80dp" android:layout_height="wrap_content"
+                    android:inputType="number" android:text="70"
+                    android:background="@drawable/edittext_border" android:padding="8dp"
+                    android:textSize="13sp" android:gravity="center"/>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Pausa entre um grupo e outro nas mensagens (segundos, de... até)"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <EditText android:id="@+id/etPauseMin"
+                    android:layout_width="56dp" android:layout_height="wrap_content"
+                    android:inputType="number" android:text="8"
+                    android:background="@drawable/edittext_border" android:padding="8dp"
+                    android:textSize="13sp" android:gravity="center"/>
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                    android:text="–" android:textSize="13sp" android:textColor="#555555"
+                    android:paddingStart="6dp" android:paddingEnd="6dp"/>
+                <EditText android:id="@+id/etPauseMax"
+                    android:layout_width="56dp" android:layout_height="wrap_content"
+                    android:inputType="number" android:text="20"
+                    android:background="@drawable/edittext_border" android:padding="8dp"
+                    android:textSize="13sp" android:gravity="center"/>
+            </LinearLayout>
 
             <View android:layout_width="match_parent" android:layout_height="1dp"
                 android:background="#E0E0E0" android:layout_marginBottom="16dp"/>

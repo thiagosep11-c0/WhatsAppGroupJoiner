@@ -15,9 +15,12 @@ class GroupJoinerService : AccessibilityService() {
     private var isSendingMessage = false
     private var isCheckingApproval = false
     private var messageToSend = ""
+    private var humanTyping = true
+    private var typingWpm = 70
     private var hasReturned = false
     private var timeoutRunnable: Runnable? = null
     private var checkRunnable: Runnable? = null
+    private var typingRunnable: Runnable? = null
 
     companion object {
         var serviceInstance: GroupJoinerService? = null
@@ -46,9 +49,12 @@ class GroupJoinerService : AccessibilityService() {
         }
     }
 
-    fun setMessageMode(message: String) {
+    // human = digitar palavra por palavra (como gente); wpm = palavras por minuto
+    fun setMessageMode(message: String, human: Boolean = true, wpm: Int = 70) {
         isSendingMessage = true
         messageToSend = message
+        humanTyping = human
+        typingWpm = wpm
     }
 
     fun clearMessageMode() {
@@ -65,8 +71,10 @@ class GroupJoinerService : AccessibilityService() {
     private fun cancelAll() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         checkRunnable?.let { handler.removeCallbacks(it) }
+        typingRunnable?.let { handler.removeCallbacks(it) }
         timeoutRunnable = null
         checkRunnable = null
+        typingRunnable = null
     }
 
     private fun scheduleCheck(delayMs: Long, attempt: Int) {
@@ -108,13 +116,10 @@ class GroupJoinerService : AccessibilityService() {
                     if (attempt < 5) scheduleCheck(2000L, attempt + 1)
                     else safeFinish("invalid")
                 }
-                else -> {
-                    isActive = false
-                    cancelAll()
-                    handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
-                    handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 1500L)
-                    handler.postDelayed({ returnToApp(status) }, 2300L)
+                "typing" -> {
+                    // Digitação humana em andamento: os passos agendados (scheduleTyping) terminam o fluxo
                 }
+                else -> leaveChat(status)
             }
         } catch (e: Exception) {
             // Qualquer crash — volta pro app com segurança
@@ -239,6 +244,12 @@ class GroupJoinerService : AccessibilityService() {
                 }
                 return "not_found"
             }
+            if (humanTyping) {
+                // Modo humano: lê o grupo, digita palavra por palavra, relê e envia (passos agendados abaixo)
+                safeRecycle(inputNode)
+                startHumanTyping()
+                return "typing"
+            }
             inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             val args = Bundle()
             args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
@@ -277,6 +288,104 @@ class GroupJoinerService : AccessibilityService() {
             }
             false
         } catch (e: Exception) { false }
+    }
+
+    // --- Fase 2 (modo humano): passos agendados ---
+    // Sequência por grupo: "lê" o grupo -> toca no campo -> escreve palavra por palavra -> relê -> envia -> fica um instante -> sai.
+    // Cada passo busca a tela de novo (os nós antigos ficam inválidos) e confere que ainda é o WhatsApp.
+
+    private fun startHumanTyping() {
+        val words = HumanTyping.splitWords(messageToSend)
+        // O limite de 20 s do setWaiting() não serve para digitar: troca por um proporcional ao tamanho da mensagem
+        timeoutRunnable?.let { handler.removeCallbacks(it) }
+        val limit = Runnable { if (isActive) safeFinish("invalid") }
+        timeoutRunnable = limit
+        handler.postDelayed(limit, 60_000L + words.size * 6_000L)
+        scheduleTyping(HumanTyping.readPauseMs()) { typingFocus(words) }
+    }
+
+    private fun scheduleTyping(delayMs: Long, action: () -> Unit) {
+        typingRunnable?.let { handler.removeCallbacks(it) }
+        val step = Runnable {
+            if (!isActive) return@Runnable
+            try { action() } catch (e: Exception) { safeFinish("invalid") }
+        }
+        typingRunnable = step
+        handler.postDelayed(step, delayMs)
+    }
+
+    // Acha o campo de mensagem na tela atual (só no WhatsApp) e roda [block] nele
+    private fun withInputField(block: (AccessibilityNodeInfo) -> Unit): Boolean {
+        val root = rootInActiveWindow ?: return false
+        return try {
+            val pkg = root.packageName?.toString() ?: ""
+            val input = if (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") findEditText(root) else null
+            if (input == null) {
+                false
+            } else {
+                try { block(input) } finally { safeRecycle(input) }
+                true
+            }
+        } catch (e: Exception) {
+            false
+        } finally {
+            safeRecycle(root)
+        }
+    }
+
+    private fun setInputText(input: AccessibilityNodeInfo, text: String) {
+        val args = Bundle()
+        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+        input.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun typingFocus(words: List<String>) {
+        val ok = withInputField { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
+        if (!ok) { safeFinish("invalid"); return }
+        scheduleTyping(HumanTyping.focusPauseMs() + HumanTyping.wordDelayMs(words[0], typingWpm)) {
+            typingWord(words, 0, "")
+        }
+    }
+
+    // Mostra a palavra [index] (o tempo de "escrevê-la" já passou) e agenda a próxima
+    private fun typingWord(words: List<String>, index: Int, typed: String) {
+        val text = typed + words[index]
+        val ok = withInputField { setInputText(it, text) }
+        if (!ok) { clearDraftAndFinish(); return }
+        if (index + 1 < words.size) {
+            scheduleTyping(HumanTyping.wordDelayMs(words[index + 1], typingWpm)) { typingWord(words, index + 1, text) }
+        } else {
+            scheduleTyping(HumanTyping.beforeSendPauseMs()) { typingSend(1) }
+        }
+    }
+
+    private fun typingSend(attempt: Int) {
+        val root = rootInActiveWindow
+        var clicked = false
+        if (root != null) {
+            clicked = clickSendButton(root)
+            safeRecycle(root)
+        }
+        when {
+            clicked -> scheduleTyping(HumanTyping.stayAfterSendMs()) { leaveChat("message_sent") }
+            attempt < 3 -> scheduleTyping(900L) { typingSend(attempt + 1) }
+            else -> clearDraftAndFinish()
+        }
+    }
+
+    // Não conseguiu enviar (tela mudou / sem botão de enviar): apaga o que foi digitado para não deixar rascunho solto no grupo
+    private fun clearDraftAndFinish() {
+        try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
+        safeFinish("invalid")
+    }
+
+    // Sai do chat (BACK x2), volta ao app e informa o resultado
+    private fun leaveChat(status: String) {
+        isActive = false
+        cancelAll()
+        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
+        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 1500L)
+        handler.postDelayed({ returnToApp(status) }, 2300L)
     }
 
     // --- Verificação de aprovação ---

@@ -116,7 +116,32 @@ object StorageManager {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         prefs.edit().clear().apply()
     }
+
+    // Ajustes da fase 2 (digitação humana e pausa entre grupos).
+    // Ficam em um arquivo à parte para "Limpar histórico" não apagar os ajustes.
+    private const val SETTINGS_PREFS = "ongroups_settings"
+
+    fun saveTypingSettings(context: Context, human: Boolean, wpm: Int, pauseMin: Int, pauseMax: Int) {
+        context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean("human_typing", human)
+            .putInt("typing_wpm", wpm)
+            .putInt("pause_min", pauseMin)
+            .putInt("pause_max", pauseMax)
+            .apply()
+    }
+
+    fun loadTypingSettings(context: Context): TypingSettings {
+        val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+        return TypingSettings(
+            human = p.getBoolean("human_typing", true),
+            wpm = p.getInt("typing_wpm", 70),
+            pauseMin = p.getInt("pause_min", 8),
+            pauseMax = p.getInt("pause_max", 20)
+        )
+    }
 }
+
+data class TypingSettings(val human: Boolean, val wpm: Int, val pauseMin: Int, val pauseMax: Int)
 
 data class ResumeState(
     val links: MutableList<String>,
