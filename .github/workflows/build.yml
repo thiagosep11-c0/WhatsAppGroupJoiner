@@ -31,8 +31,24 @@ jobs:
           unzip -q /tmp/gradle.zip -d /tmp/gradle
           /tmp/gradle/gradle-8.2/bin/gradle wrapper --gradle-version 8.2
 
+      - name: Restaurar chave de assinatura estável
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            mkdir -p ~/.android
+            echo "$DEBUG_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > ~/.android/debug.keystore
+            echo "Chave de assinatura estável restaurada."
+          else
+            echo "::warning::Segredo DEBUG_KEYSTORE_B64 ausente: o build vai gerar uma chave de debug nova (o APK não atualiza por cima do anterior)."
+          fi
+
       - name: Build APK debug
         run: ./gradlew assembleDebug
+
+      - name: Mostrar assinatura do APK
+        run: |
+          keytool -printcert -jarfile app/build/outputs/apk/debug/app-debug.apk | grep -E 'Owner|SHA256'
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
