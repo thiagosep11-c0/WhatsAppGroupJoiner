@@ -7,6 +7,21 @@ android {
     namespace 'com.groupjoiner'
     compileSdk 34
 
+    // Chave de debug estavel: no CI o workflow restaura a chave (segredo DEBUG_KEYSTORE_B64) e informa o caminho em
+    // DEBUG_KEYSTORE_FILE. Sem a variavel (build local), nada muda: vale a chave de debug padrao do Android.
+    signingConfigs {
+        debug {
+            def estavel = System.getenv('DEBUG_KEYSTORE_FILE')
+            if (estavel) {
+                storeFile file(estavel)
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+                storeType 'pkcs12'
+            }
+        }
+    }
+
     defaultConfig {
         applicationId "com.groupjoiner"
         minSdk 21

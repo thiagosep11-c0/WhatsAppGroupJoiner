@@ -40,6 +40,9 @@ jobs:
             # Decodifica com Python: o base64 do runner novo (uutils) recusou a entrada; aqui se descarta BOM/nao-ASCII e o b64decode ignora quebras de linha e espacos
             python3 -c 'import base64,os; d=base64.b64decode(os.environ["DEBUG_KEYSTORE_B64"].encode("ascii","ignore")); open(os.path.expanduser("~/.android/debug.keystore"),"wb").write(d); print("Chave de assinatura estavel restaurada:", len(d), "bytes")'
             keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -E 'Alias name|SHA256'
+            # Caminho explicito para o Gradle (nao depende do local padrao do AGP): o app/build.gradle le DEBUG_KEYSTORE_FILE
+            cp ~/.android/debug.keystore "$RUNNER_TEMP/debug.keystore"
+            echo "DEBUG_KEYSTORE_FILE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
           else
             echo "::warning::Segredo DEBUG_KEYSTORE_B64 ausente: o build vai gerar uma chave de debug nova (o APK não atualiza por cima do anterior)."
           fi
@@ -56,3 +59,13 @@ jobs:
         with:
           name: GroupJoiner-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Diagnóstico da chave (temporário)
+        if: always()
+        run: |
+          echo "HOME=$HOME  user=$(id -un)"
+          env | grep -E '^(ANDROID|XDG|GRADLE_USER|DEBUG_KEYSTORE_FILE)' || true
+          for f in $(find /home /root /tmp /opt /usr/local -name 'debug.keystore' 2>/dev/null); do
+            echo "== $f"
+            keytool -list -keystore "$f" -storepass android 2>&1 | grep -E 'fingerprint' || true
+          done
