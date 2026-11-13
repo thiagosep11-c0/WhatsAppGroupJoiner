@@ -37,8 +37,9 @@ jobs:
         run: |
           if [ -n "$DEBUG_KEYSTORE_B64" ]; then
             mkdir -p ~/.android
-            echo "$DEBUG_KEYSTORE_B64" | tr -d '\r\n ' | base64 -d > ~/.android/debug.keystore
-            echo "Chave de assinatura estável restaurada."
+            # Decodifica com Python: o base64 do runner novo (uutils) recusou a entrada; aqui se descarta BOM/nao-ASCII e o b64decode ignora quebras de linha e espacos
+            python3 -c 'import base64,os; d=base64.b64decode(os.environ["DEBUG_KEYSTORE_B64"].encode("ascii","ignore")); open(os.path.expanduser("~/.android/debug.keystore"),"wb").write(d); print("Chave de assinatura estavel restaurada:", len(d), "bytes")'
+            keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep -E 'Alias name|SHA256'
           else
             echo "::warning::Segredo DEBUG_KEYSTORE_B64 ausente: o build vai gerar uma chave de debug nova (o APK não atualiza por cima do anterior)."
           fi
