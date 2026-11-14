@@ -272,6 +272,44 @@
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="Para acompanhar, volte à aba Início. O app não manda de novo para um grupo que já recebeu a mensagem há pouco tempo (prazo ajustável na aba Config)."
                 android:textSize="11sp" android:textColor="#888888"/>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginTop="16dp" android:layout_marginBottom="12dp"/>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="🔍 Maneira 2: pelas mensagens não lidas" android:textSize="15sp"
+                android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="O app abre o WhatsApp, lê a lista de conversas (usando o filtro Grupos) e mostra quantas mensagens não lidas cada grupo tem. Nesta etapa ele só LÊ e mostra: não envia nada."
+                android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5"
+                android:padding="10dp" android:layout_marginBottom="10dp"/>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="10dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="Enviar só em grupos com até quantas não lidas?"
+                    android:textSize="13sp" android:textColor="#555555"/>
+                <EditText android:id="@+id/etMaxUnread"
+                    android:layout_width="80dp" android:layout_height="wrap_content"
+                    android:inputType="number" android:text="0"
+                    android:background="@drawable/edittext_border" android:padding="8dp"
+                    android:textSize="13sp" android:gravity="center"/>
+            </LinearLayout>
+
+            <Button android:id="@+id/btnScan" android:layout_width="match_parent"
+                android:layout_height="46dp" android:text="🔍 Escanear grupos do WhatsApp"
+                android:backgroundTint="#1565C0" android:textColor="#FFFFFF" android:textSize="13sp"
+                android:layout_marginBottom="10dp"/>
+
+            <TextView android:id="@+id/tvScanResult" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Nenhum escaneamento ainda."
+                android:textSize="12sp" android:textColor="#222222" android:background="#FAFAFA"
+                android:padding="10dp" android:textIsSelectable="true" android:layout_marginBottom="8dp"/>
+
+            <Button android:id="@+id/btnScanCopy" android:layout_width="match_parent"
+                android:layout_height="40dp" android:text="📋 Copiar diagnóstico (sem nomes)"
+                android:backgroundTint="#37474F" android:textColor="#FFFFFF" android:textSize="12sp"/>
         </LinearLayout>
     </ScrollView>
 

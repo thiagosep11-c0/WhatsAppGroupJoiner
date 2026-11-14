@@ -75,6 +75,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMsgFromHistory: Button
     private lateinit var btnMsgClear: Button
     private lateinit var btnMsgStart: Button
+    private lateinit var etMaxUnread: EditText
+    private lateinit var btnScan: Button
+    private lateinit var tvScanResult: TextView
+    private lateinit var btnScanCopy: Button
+    private var scanInProgress = false
+    private var scanSafetyRunnable: Runnable? = null
 
     // --- Aba Registro ---
     private lateinit var tvLog: TextView
@@ -152,6 +158,7 @@ class MainActivity : AppCompatActivity() {
         const val EXTRA_STATUS = "grp_status"
         const val EXTRA_SEQ = "grp_seq"
         const val EXTRA_RECOVER = "recover"
+        const val EXTRA_SCAN_DONE = "scan_done"
         const val MAX_ATTEMPTS = 3
         const val STALE_MS = 15 * 60 * 1000L
     }
@@ -259,6 +266,10 @@ class MainActivity : AppCompatActivity() {
         btnMsgFromHistory = findViewById(R.id.btnMsgFromHistory)
         btnMsgClear     = findViewById(R.id.btnMsgClear)
         btnMsgStart     = findViewById(R.id.btnMsgStart)
+        etMaxUnread     = findViewById(R.id.etMaxUnread)
+        btnScan         = findViewById(R.id.btnScan)
+        tvScanResult    = findViewById(R.id.tvScanResult)
+        btnScanCopy     = findViewById(R.id.btnScanCopy)
         tvLog           = findViewById(R.id.tvLog)
         scrollLog       = findViewById(R.id.scrollLog)
         btnLogRefresh   = findViewById(R.id.btnLogRefresh)
@@ -430,6 +441,24 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnMsgStart.setOnClickListener { startMessagesOnly() }
+
+        // --- Maneira 2: escanear (só leitura) ---
+        btnScan.setOnClickListener { startScan() }
+        btnScanCopy.setOnClickListener {
+            val r = ScanStore.load(this)
+            val texto = if (r == null) "Nenhum escaneamento ainda."
+                else "Conversas lidas: ${r.rows.size}\nObservações: ${r.note}\n\n${r.diag}"
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("diagnostico", texto))
+            Toast.makeText(this, "Diagnóstico copiado (sem nomes)!", Toast.LENGTH_SHORT).show()
+        }
+        etMaxUnread.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                renderScan(ScanStore.load(this@MainActivity))
+            }
+        })
 
         // --- Aba Registro ---
         btnLogRefresh.setOnClickListener { refreshLogView() }
@@ -1060,6 +1089,12 @@ class MainActivity : AppCompatActivity() {
         inc?.removeExtra(EXTRA_STATUS)
         inc?.removeExtra(EXTRA_SEQ)
         inc?.removeExtra(EXTRA_RECOVER)
+        val scanDone = inc?.getBooleanExtra(EXTRA_SCAN_DONE, false) ?: false
+        inc?.removeExtra(EXTRA_SCAN_DONE)
+        if (scanDone) {
+            onScanFinished()
+            return
+        }
         if (status != null || recover) showOverLockScreen()
 
         // Esta tela já está conduzindo o processo
@@ -1302,6 +1337,92 @@ class MainActivity : AppCompatActivity() {
     // Ajustes (aba Config)
     // =====================================================================
 
+    // =====================================================================
+    // Maneira 2: escanear a lista de conversas do WhatsApp (SÓ LEITURA)
+    // =====================================================================
+
+    private fun readMaxUnread(): Int =
+        (etMaxUnread.text.toString().trim().toIntOrNull() ?: 0).coerceIn(0, 999)
+
+    private fun startScan() {
+        if (isRunning || runActive) {
+            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (scanInProgress) {
+            Toast.makeText(this, "O escaneamento já está em andamento.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!requireAccessibility()) return
+        val svc = GroupJoinerService.serviceInstance
+        if (svc == null) {
+            Toast.makeText(this, "Serviço de acessibilidade desligado.", Toast.LENGTH_LONG).show()
+            return
+        }
+        selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
+        val abrir = packageManager.getLaunchIntentForPackage(selectedPackage)
+        if (abrir == null) {
+            Toast.makeText(this, "WhatsApp não encontrado neste celular.", Toast.LENGTH_LONG).show()
+            return
+        }
+        scanInProgress = true
+        btnScan.isEnabled = false
+        tvScanResult.text = "🔍 Escaneando... o app abre o WhatsApp, lê a lista de conversas e volta sozinho " +
+            "(pode levar até 3 minutos). Não mexa no celular."
+        RunLog.add(this, "🔍 Escaneamento iniciado ($selectedPackage)")
+        acquireScreenLock()
+        scanSafetyRunnable?.let { handler.removeCallbacks(it) }
+        val r = Runnable { if (scanInProgress) onScanFinished() }
+        scanSafetyRunnable = r
+        handler.postDelayed(r, 200_000L)
+        abrir.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(abrir)
+        } catch (e: Exception) {
+            RunLog.add(this, "⚠ Não consegui abrir o WhatsApp: ${e.message}")
+        }
+        svc.startScan()
+    }
+
+    /** O serviço terminou (ou o tempo esgotou): mostra o resultado na aba Mensagens. */
+    private fun onScanFinished() {
+        scanSafetyRunnable?.let { handler.removeCallbacks(it) }
+        scanSafetyRunnable = null
+        val estava = scanInProgress
+        scanInProgress = false
+        btnScan.isEnabled = true
+        if (!runActive) {
+            wakeLock?.let { if (it.isHeld) it.release() }
+            wakeLock = null
+        }
+        showTab("messages")
+        renderScan(ScanStore.load(this))
+        if (estava) Toast.makeText(this, "Escaneamento concluído", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun scanText(r: ScanResult): String {
+        val limite = readMaxUnread()
+        val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(r.finishedAt))
+        val dentro = r.rows.count { it.unread <= limite }
+        val sb = StringBuilder()
+        sb.append("Lido às $hora: ${r.rows.size} conversas\n")
+        sb.append("✅ $dentro com até $limite não lidas (receberiam a mensagem)\n")
+        sb.append("⏭ ${r.rows.size - dentro} com mais (seriam puladas)\n")
+        if (r.note.isNotEmpty()) sb.append("ℹ ${r.note}\n")
+        sb.append("\n")
+        r.rows.forEach {
+            sb.append(if (it.unread <= limite) "✅ " else "⏭ ")
+            sb.append(it.name).append(" — ")
+            sb.append(if (it.approx) "marcada como não lida" else "${it.unread} não lidas").append("\n")
+        }
+        return sb.toString()
+    }
+
+    private fun renderScan(r: ScanResult?) {
+        if (scanInProgress) return
+        tvScanResult.text = if (r == null) "Nenhum escaneamento ainda." else scanText(r)
+    }
+
     private fun readTypingWpm(): Int =
         (etTypingWpm.text.toString().trim().toIntOrNull() ?: 70).coerceIn(20, 250)
 
@@ -1332,6 +1453,7 @@ class MainActivity : AppCompatActivity() {
         etCooldownHours.setText(StorageManager.getPref(this, "cfg_cooldown", "3"))
         editMsgLinks.setText(StorageManager.getPref(this, "msg_links"))
         etMsgOnly.setText(StorageManager.getPref(this, "msg_text"))
+        etMaxUnread.setText(StorageManager.getPref(this, "max_unread", "0"))
         updateMsgLinkCount()
     }
 
@@ -1341,6 +1463,7 @@ class MainActivity : AppCompatActivity() {
         StorageManager.setPref(this, "cfg_cooldown", readCooldownHours().toString())
         StorageManager.setPref(this, "msg_links", editMsgLinks.text.toString())
         StorageManager.setPref(this, "msg_text", etMsgOnly.text.toString())
+        StorageManager.setPref(this, "max_unread", readMaxUnread().toString())
     }
 
     // =====================================================================
@@ -1397,7 +1520,10 @@ class MainActivity : AppCompatActivity() {
             else { tv.setTextColor(Color.parseColor("#888888")); tv.setBackgroundColor(Color.WHITE) }
         }
         if (tab == "log") refreshLogView()
-        if (tab == "messages") updateMsgLinkCount()
+        if (tab == "messages") {
+            updateMsgLinkCount()
+            renderScan(ScanStore.load(this))
+        }
         if (tab == "history") updateHistoryCount()
     }
 

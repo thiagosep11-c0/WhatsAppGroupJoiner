@@ -2,11 +2,13 @@ package com.groupjoiner
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.text.Normalizer
 
 class GroupJoinerService : AccessibilityService() {
 
@@ -415,6 +417,344 @@ class GroupJoinerService : AccessibilityService() {
         cancelAll()
         hasReturned = false
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
+    }
+
+    // ---------------- Escanear: lê a lista de conversas do WhatsApp (SÓ LEITURA: não envia nada) ----------------
+    // Passos: acha a lista de conversas -> liga o filtro "Grupos" -> lê as linhas rolando a lista -> volta o filtro
+    // para "Todas" -> salva o resultado e traz o app para a frente.
+
+    private var scanning = false
+    private var scanRunnable: Runnable? = null
+    private var scanTimeout: Runnable? = null
+    private val scanRows = LinkedHashMap<String, ScanRow>()
+    private val scanNotes = mutableListOf<String>()
+    private var scanDiag = ""
+    private var scanPass = 0
+    private var scanNoNew = 0
+    private var scanChipClicked = false
+
+    private class NodeInfo(val cls: String, val id: String, val text: String, val desc: String, val clickable: Boolean)
+
+    private val timeLike = Regex("""^(\d{1,2}[:h]\d{2}|\d{1,2}/\d{1,2}(/\d{2,4})?|ontem|hoje|yesterday|today|seg|ter|qua|qui|sex|sab|dom|mon|tue|wed|thu|fri|sat|sun)\.?$""")
+    private val onlyDigits = Regex("""\d{1,4}\+?""")
+    private val unreadRe1 = Regex("""(\d+)\s+(?:mensagens?|messages?)\s+(?:nao\s+lidas?|unread)""")
+    private val unreadRe2 = Regex("""(\d+)\s+unread""")
+
+    fun startScan() {
+        if (scanning) return
+        isActive = false
+        cancelAll()
+        scanning = true
+        scanRows.clear()
+        scanNotes.clear()
+        scanDiag = ""
+        scanPass = 0
+        scanNoNew = 0
+        scanChipClicked = false
+        scanTimeout?.let { handler.removeCallbacks(it) }
+        val t = Runnable {
+            if (scanning) {
+                scanNotes.add("tempo esgotado (3 min)")
+                finishScan()
+            }
+        }
+        scanTimeout = t
+        handler.postDelayed(t, 180_000L)
+        scheduleScan(3_000L) { scanPrepare(1) }
+    }
+
+    private fun scheduleScan(delayMs: Long, action: () -> Unit) {
+        scanRunnable?.let { handler.removeCallbacks(it) }
+        val r = Runnable {
+            if (!scanning) return@Runnable
+            try {
+                action()
+            } catch (e: Exception) {
+                scanNotes.add("erro: ${e.message}")
+                finishScan()
+            }
+        }
+        scanRunnable = r
+        handler.postDelayed(r, delayMs)
+    }
+
+    private fun isWhatsAppRoot(root: AccessibilityNodeInfo): Boolean {
+        val pkg = root.packageName?.toString() ?: ""
+        return pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
+    }
+
+    private fun norm(s: String): String =
+        Normalizer.normalize(s.lowercase(), Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
+
+    private fun mask(s: String): String =
+        s.map { if (it.isLetter()) 'x' else if (it.isDigit()) '9' else it }.joinToString("")
+
+    private fun maskDesc(s: String): String {
+        val t = norm(s)
+        return if (unreadRe1.containsMatchIn(t) || unreadRe2.containsMatchIn(t) || t.contains("nao lida")) s else mask(s)
+    }
+
+    /** Garante que a lista de conversas está na tela: sai de um chat com BACK (no máximo 2 vezes) e reabre o WhatsApp se ele saiu. */
+    private fun scanPrepare(attempt: Int) {
+        val root = rootInActiveWindow
+        if (root == null || !isWhatsAppRoot(root)) {
+            safeRecycle(root)
+            if (attempt >= 8) {
+                scanNotes.add("o WhatsApp não abriu na frente")
+                finishScan()
+                return
+            }
+            if (attempt == 3 || attempt == 6) {
+                try {
+                    val i = packageManager.getLaunchIntentForPackage(MainActivity.selectedPackage)
+                    i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    i?.let { startActivity(it) }
+                } catch (e: Exception) {}
+            }
+            scheduleScan(1_500L) { scanPrepare(attempt + 1) }
+            return
+        }
+        val composer = findComposer(root)
+        safeRecycle(composer)
+        safeRecycle(root)
+        if (composer != null) {
+            if (attempt <= 2) {
+                scanNotes.add("estava dentro de uma conversa: voltei para a lista")
+                performGlobalAction(GLOBAL_ACTION_BACK)
+                scheduleScan(1_400L) { scanPrepare(attempt + 1) }
+            } else {
+                scanNotes.add("não consegui sair da conversa: abra a lista de Conversas no WhatsApp e tente de novo")
+                finishScan()
+            }
+            return
+        }
+        scanChip()
+    }
+
+    /** Campo de digitar mensagem de um chat (a lista de conversas não tem). */
+    private fun findComposer(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        while (q.isNotEmpty()) {
+            val n = q.removeFirst()
+            if (n.isEditable && (n.className?.toString() ?: "").contains("EditText")) {
+                val dica = if (Build.VERSION.SDK_INT >= 26) (n.hintText?.toString() ?: "") else ""
+                val t = norm((n.text?.toString() ?: "") + " " + (n.contentDescription?.toString() ?: "") + " " + dica)
+                if (t.contains("mensagem") || t.contains("message")) return n
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
+    /** A lista principal da tela: o RecyclerView/ListView com mais itens. */
+    private fun findListNode(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        while (q.isNotEmpty()) {
+            val n = q.removeFirst()
+            val cls = n.className?.toString() ?: ""
+            if ((cls.contains("RecyclerView") || cls.contains("ListView")) && n.childCount > (best?.childCount ?: -1)) best = n
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return best
+    }
+
+    /** Botão de filtro (chip) pelo texto; não procura dentro da lista de conversas. */
+    private fun findChip(root: AccessibilityNodeInfo, nomes: List<String>): AccessibilityNodeInfo? {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        while (q.isNotEmpty()) {
+            val n = q.removeFirst()
+            val cls = n.className?.toString() ?: ""
+            if (cls.contains("RecyclerView") || cls.contains("ListView")) continue
+            val t = norm((n.text?.toString() ?: "").trim())
+            val d = norm((n.contentDescription?.toString() ?: "").trim())
+            if ((t in nomes || d in nomes) && (n.isClickable || n.parent?.isClickable == true)) return n
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return null
+    }
+
+    private fun scanChip() {
+        val root = rootInActiveWindow
+        if (root == null) {
+            scanNotes.add("sem janela do WhatsApp")
+            finishScan()
+            return
+        }
+        val chip = findChip(root, listOf("grupos", "groups"))
+        if (chip != null) {
+            val ok = tryClickNode(chip)
+            scanChipClicked = ok
+            scanNotes.add(if (ok) "filtro Grupos ligado" else "achei o filtro Grupos mas não consegui tocar nele")
+        } else {
+            scanNotes.add("filtro Grupos NÃO encontrado: li todas as conversas (podem entrar contatos pessoais)")
+        }
+        safeRecycle(root)
+        scheduleScan(1_600L) { scanRead() }
+    }
+
+    private fun flatten(node: AccessibilityNodeInfo, depth: Int, out: MutableList<NodeInfo>) {
+        if (depth > 7 || out.size >= 60) return
+        out.add(
+            NodeInfo(
+                node.className?.toString() ?: "",
+                node.viewIdResourceName ?: "",
+                node.text?.toString() ?: "",
+                node.contentDescription?.toString() ?: "",
+                node.isClickable
+            )
+        )
+        for (i in 0 until node.childCount) {
+            val c = node.getChild(i) ?: continue
+            flatten(c, depth + 1, out)
+            safeRecycle(c)
+        }
+    }
+
+    /** Transforma uma linha da lista em (nome, não lidas). Devolve null se não parece uma conversa. */
+    private fun parseRow(infos: List<NodeInfo>): ScanRow? {
+        val textos = infos.filter { it.text.isNotBlank() }
+        if (textos.size < 2) return null
+        val porId = infos.firstOrNull { it.text.isNotBlank() && (it.id.contains("contact_name") || it.id.endsWith("/name")) }
+        val candidato = porId ?: textos.firstOrNull {
+            val t = norm(it.text.trim())
+            !timeLike.matches(t) && !t.matches(onlyDigits)
+        }
+        val nome = candidato?.text?.trim() ?: return null
+        if (norm(nome) == "arquivadas" || norm(nome) == "archived") return null
+
+        var unread = 0
+        var approx = false
+        var achou = false
+        for (n in infos) {
+            for (s in listOf(n.desc, n.text)) {
+                if (s.isBlank()) continue
+                val t = norm(s)
+                val m = unreadRe1.find(t) ?: unreadRe2.find(t)
+                if (m != null) {
+                    unread = m.groupValues[1].toIntOrNull() ?: 0
+                    achou = true
+                    break
+                }
+            }
+            if (achou) break
+        }
+        if (!achou) {
+            val c = infos.firstOrNull { it.text.matches(onlyDigits) && (it.id.contains("count") || it.id.contains("unread")) }
+            if (c != null) {
+                unread = c.text.filter { it.isDigit() }.toIntOrNull() ?: 0
+                achou = true
+            }
+        }
+        if (!achou && infos.any { norm(it.desc).contains("nao lida") }) {
+            unread = 1
+            approx = true
+        }
+        return ScanRow(nome, unread, approx)
+    }
+
+    private fun scanRead() {
+        scanPass++
+        val root = rootInActiveWindow
+        if (root == null || !isWhatsAppRoot(root)) {
+            safeRecycle(root)
+            scanNotes.add("saí do WhatsApp durante a leitura")
+            finishScan()
+            return
+        }
+        val list = findListNode(root)
+        if (list == null) {
+            scanNotes.add("lista de conversas não reconhecida na tela")
+            scanDiag = buildDiag(root, null)
+            safeRecycle(root)
+            finishScan()
+            return
+        }
+        var added = 0
+        val diagRows = mutableListOf<List<NodeInfo>>()
+        for (i in 0 until list.childCount) {
+            val row = list.getChild(i) ?: continue
+            val infos = mutableListOf<NodeInfo>()
+            flatten(row, 0, infos)
+            safeRecycle(row)
+            val parsed = parseRow(infos) ?: continue
+            if (diagRows.size < 2) diagRows.add(infos)
+            val old = scanRows[parsed.name]
+            if (old == null) {
+                scanRows[parsed.name] = parsed
+                added++
+            } else if (parsed.unread > old.unread) {
+                scanRows[parsed.name] = parsed
+            }
+        }
+        if (scanPass == 1) scanDiag = buildDiag(root, diagRows)
+        if (added == 0) scanNoNew++ else scanNoNew = 0
+        val podeRolar = list.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+        safeRecycle(list)
+        safeRecycle(root)
+        if (scanNoNew >= 2 || !podeRolar || scanPass >= 80) {
+            scheduleScan(300L) { scanRestoreChip() }
+        } else {
+            scheduleScan(900L) { scanRead() }
+        }
+    }
+
+    /** Devolve o filtro do WhatsApp para "Todas" (se o app tinha ligado "Grupos"). */
+    private fun scanRestoreChip() {
+        if (scanChipClicked) {
+            val root = rootInActiveWindow
+            if (root != null && isWhatsAppRoot(root)) {
+                val chip = findChip(root, listOf("todas", "all"))
+                if (chip != null) tryClickNode(chip)
+            }
+            safeRecycle(root)
+        }
+        scheduleScan(800L) { finishScan() }
+    }
+
+    /** Diagnóstico para calibrar a leitura: estrutura da tela e de 2 linhas, com letras trocadas por x e números por 9. */
+    private fun buildDiag(root: AccessibilityNodeInfo, rows: List<List<NodeInfo>>?): String {
+        val sb = StringBuilder()
+        sb.append("Diagnóstico (letras trocadas por x e números por 9)\n")
+        sb.append("--- tela (classe | id | filhos | rolável)\n")
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var cont = 0
+        while (q.isNotEmpty() && cont < 40) {
+            val n = q.removeFirst()
+            cont++
+            sb.append("${n.className} | ${n.viewIdResourceName ?: "-"} | ${n.childCount} | ${n.isScrollable}\n")
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        rows?.forEachIndexed { idx, infos ->
+            sb.append("--- linha ${idx + 1} (classe | id | texto | descrição | toque)\n")
+            infos.forEach {
+                sb.append("${it.cls} | ${it.id.ifEmpty { "-" }} | ${mask(it.text)} | ${maskDesc(it.desc)} | ${it.clickable}\n")
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun finishScan() {
+        if (!scanning) return
+        scanning = false
+        scanRunnable?.let { handler.removeCallbacks(it) }
+        scanRunnable = null
+        scanTimeout?.let { handler.removeCallbacks(it) }
+        scanTimeout = null
+        val rows = scanRows.values.toList()
+        val nota = scanNotes.joinToString("; ")
+        try { ScanStore.save(applicationContext, ScanResult(rows, nota, scanDiag, System.currentTimeMillis())) } catch (e: Exception) {}
+        RunLog.add(applicationContext, "🔍 Escaneamento concluído: ${rows.size} conversas lidas" + (if (nota.isNotEmpty()) " ($nota)" else ""))
+        try {
+            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
+            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent?.putExtra(MainActivity.EXTRA_SCAN_DONE, true)
+            intent?.let { startActivity(it) }
+        } catch (e: Exception) {}
     }
 
     private fun markSentNow() {
