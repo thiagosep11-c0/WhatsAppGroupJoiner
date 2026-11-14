@@ -593,7 +593,28 @@ class GroupJoinerService : AccessibilityService() {
             scanNotes.add("filtro Grupos NÃO encontrado: li todas as conversas (podem entrar contatos pessoais)")
         }
         safeRecycle(root)
-        scheduleScan(1_600L) { scanRead() }
+        scheduleScan(1_600L) { scanToTop(0) }
+    }
+
+    /** Antes de ler, rola a lista até o TOPO (ela pode estar no meio): assim o escaneamento cobre todos os grupos, de cima até embaixo. */
+    private fun scanToTop(n: Int) {
+        val root = rootInActiveWindow
+        if (root == null || !isWhatsAppRoot(root)) {
+            safeRecycle(root)
+            scanNotes.add("saí do WhatsApp ao subir a lista")
+            finishScan()
+            return
+        }
+        val list = findListNode(root)
+        val moveu = list?.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD) ?: false
+        safeRecycle(list)
+        safeRecycle(root)
+        if (moveu && n < 60) {
+            scheduleScan(350L) { scanToTop(n + 1) }
+        } else {
+            if (n > 0) scanNotes.add("subi a lista até o topo ($n rolagens)")
+            scheduleScan(700L) { scanRead() }
+        }
     }
 
     private fun flatten(node: AccessibilityNodeInfo, depth: Int, out: MutableList<NodeInfo>) {

@@ -58,11 +58,13 @@ class MainActivity : AppCompatActivity() {
     // --- Abas ---
     private lateinit var tabHome: TextView
     private lateinit var tabMessages: TextView
+    private lateinit var tabAuto: TextView
     private lateinit var tabHistory: TextView
     private lateinit var tabLog: TextView
     private lateinit var tabSettings: TextView
     private lateinit var pageHome: View
     private lateinit var pageMessages: View
+    private lateinit var pageAuto: View
     private lateinit var pageHistory: View
     private lateinit var pageLog: View
     private lateinit var pageSettings: View
@@ -251,11 +253,13 @@ class MainActivity : AppCompatActivity() {
         pageEditLinks   = findViewById(R.id.pageEditLinks)
         tabHome         = findViewById(R.id.tabHome)
         tabMessages     = findViewById(R.id.tabMessages)
+        tabAuto         = findViewById(R.id.tabAuto)
         tabHistory      = findViewById(R.id.tabHistory)
         tabLog          = findViewById(R.id.tabLog)
         tabSettings     = findViewById(R.id.tabSettings)
         pageHome        = findViewById(R.id.pageHome)
         pageMessages    = findViewById(R.id.pageMessages)
+        pageAuto        = findViewById(R.id.pageAuto)
         pageHistory     = findViewById(R.id.pageHistory)
         pageLog         = findViewById(R.id.pageLog)
         pageSettings    = findViewById(R.id.pageSettings)
@@ -327,6 +331,12 @@ class MainActivity : AppCompatActivity() {
         tabHistory.setOnClickListener { showTab("history") }
         tabLog.setOnClickListener { showTab("log") }
         tabSettings.setOnClickListener { showTab("settings") }
+        // seis abas: a de mensagens por lista e a automática (sem lista) ficam separadas
+        tabMessages.text = "📝\nPor lista"
+        tabAuto.text = "🤖\nAutomático"
+        tabAuto.maxLines = 2
+        tabAuto.setOnClickListener { showTab("auto") }
+        listOf(tabHome, tabMessages, tabAuto, tabHistory, tabLog, tabSettings).forEach { it.textSize = 10f }
     }
 
     private fun setupButtons() {
@@ -1395,7 +1405,7 @@ class MainActivity : AppCompatActivity() {
             wakeLock?.let { if (it.isHeld) it.release() }
             wakeLock = null
         }
-        showTab("messages")
+        showTab("auto")
         renderScan(ScanStore.load(this))
         if (estava) Toast.makeText(this, "Escaneamento concluído", Toast.LENGTH_SHORT).show()
     }
@@ -1507,23 +1517,21 @@ class MainActivity : AppCompatActivity() {
 
     private fun showTab(tab: String) {
         listOf(
-            "home" to pageHome, "messages" to pageMessages, "history" to pageHistory,
+            "home" to pageHome, "messages" to pageMessages, "auto" to pageAuto, "history" to pageHistory,
             "log" to pageLog, "settings" to pageSettings
         ).forEach { (key, view) ->
             view.visibility = if (key == tab) View.VISIBLE else View.GONE
         }
         listOf(
-            "home" to tabHome, "messages" to tabMessages, "history" to tabHistory,
+            "home" to tabHome, "messages" to tabMessages, "auto" to tabAuto, "history" to tabHistory,
             "log" to tabLog, "settings" to tabSettings
         ).forEach { (key, tv) ->
             if (key == tab) { tv.setTextColor(Color.parseColor("#075E54")); tv.setBackgroundColor(Color.parseColor("#E8F5E9")) }
             else { tv.setTextColor(Color.parseColor("#888888")); tv.setBackgroundColor(Color.WHITE) }
         }
         if (tab == "log") refreshLogView()
-        if (tab == "messages") {
-            updateMsgLinkCount()
-            renderScan(ScanStore.load(this))
-        }
+        if (tab == "messages") updateMsgLinkCount()
+        if (tab == "auto") renderScan(ScanStore.load(this))
         if (tab == "history") updateHistoryCount()
     }
 
