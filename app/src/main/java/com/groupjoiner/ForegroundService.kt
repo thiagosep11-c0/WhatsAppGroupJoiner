@@ -142,7 +142,7 @@ class ForegroundService : Service() {
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setContentIntent(openPending(context))
-                .addAction(android.R.drawable.ic_delete, "Parar", stopPending)
+                .addAction(android.R.drawable.ic_delete, "Finalizar", stopPending)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
@@ -160,7 +160,7 @@ class ForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            RunLog.add(this, "⏹ Parado pelo botão da notificação")
+            RunLog.add(this, "⏹ Finalizado pelo botão da notificação")
             GroupJoinerService.serviceInstance?.abortCurrent() // não deixa terminar de digitar/enviar o grupo atual
             StorageManager.clearRun(this)
             MainActivity.instance?.stopRunFromOutside()

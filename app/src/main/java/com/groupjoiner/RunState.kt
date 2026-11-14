@@ -49,6 +49,7 @@ fun RunSnapshot.summaryLine(): String {
 /** Dados que valem enquanto o processo do app estiver vivo (a tela do app pode morrer, isto não). */
 object RunRuntime {
     @Volatile var currentLink: String? = null
+    @Volatile var currentPkg: String = ""      // WhatsApp (normal ou Business) que está tratando o grupo atual
     @Volatile var groupSeq: Long = 0L
     @Volatile var groupDone: Boolean = true
 }

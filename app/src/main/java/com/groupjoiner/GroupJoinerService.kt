@@ -411,10 +411,17 @@ class GroupJoinerService : AccessibilityService() {
         } catch (e: Exception) {}
     }
 
-    // Cancela o que estiver em andamento neste grupo (timers, digitação) e apaga rascunho, se houver
+    // Cancela o que estiver em andamento (grupo atual: timers e digitação; escaneamento) e apaga rascunho, se houver
     fun abortCurrent() {
         isActive = false
         cancelAll()
+        // derruba também tudo o que já estava agendado (voltar, devolver o resultado, passos do escaneamento):
+        // nada do processo finalizado pode disparar depois e atrapalhar o próximo
+        handler.removeCallbacksAndMessages(null)
+        scanning = false
+        scanRunnable = null
+        scanTimeout = null
+        scanPkg = ""
         hasReturned = false
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
     }
@@ -785,7 +792,8 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun markSentNow() {
         val link = RunRuntime.currentLink ?: return
-        try { StorageManager.markSent(applicationContext, link) } catch (e: Exception) {}
+        val pkg = RunRuntime.currentPkg.ifEmpty { "com.whatsapp" }
+        try { StorageManager.markSent(applicationContext, link, pkg) } catch (e: Exception) {}
     }
 
     // Sai do chat (BACK x2), volta ao app e informa o resultado

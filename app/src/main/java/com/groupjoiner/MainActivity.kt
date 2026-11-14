@@ -37,7 +37,9 @@ class MainActivity : AppCompatActivity() {
     // --- Tela inicial ---
     private lateinit var btnStart: Button
     private lateinit var btnPause: Button
-    private lateinit var btnStop: Button
+    private lateinit var runBanner: View
+    private lateinit var tvBannerStatus: TextView
+    private lateinit var btnBannerStop: Button
     private lateinit var btnRetry: Button
     private lateinit var btnPermission: Button
     private lateinit var btnEditLinks: Button
@@ -197,6 +199,7 @@ class MainActivity : AppCompatActivity() {
         renderIdleStatus()
         // Se havia um processo em andamento (ou o sistema reabriu o app com um resultado), continua de onde parou
         handleIncoming(intent)
+        updateRunBanner()
         handler.postDelayed({ maybeAskBatteryOptimization() }, 1500L)
     }
 
@@ -204,11 +207,13 @@ class MainActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncoming(intent)
+        updateRunBanner()
     }
 
     override fun onResume() {
         super.onResume()
         if (!runActive) renderIdleStatus()
+        updateRunBanner()
     }
 
     override fun onPause() {
@@ -243,7 +248,9 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         btnStart        = findViewById(R.id.btnStart)
         btnPause        = findViewById(R.id.btnPause)
-        btnStop         = findViewById(R.id.btnStop)
+        runBanner       = findViewById(R.id.runBanner)
+        tvBannerStatus  = findViewById(R.id.tvBannerStatus)
+        btnBannerStop   = findViewById(R.id.btnBannerStop)
         btnRetry        = findViewById(R.id.btnRetry)
         btnPermission   = findViewById(R.id.btnPermission)
         btnEditLinks    = findViewById(R.id.btnEditLinks)
@@ -325,7 +332,7 @@ class MainActivity : AppCompatActivity() {
 
         btnPause.visibility = View.GONE
         btnRetry.visibility = View.GONE
-        btnStop.visibility = View.GONE
+        runBanner.visibility = View.GONE
         etMaxGroups.setText("0")
     }
 
@@ -397,14 +404,8 @@ class MainActivity : AppCompatActivity() {
             if (!isPaused) pauseRunByUser() else resumeAfterPause()
         }
 
-        btnStop.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle("Parar de vez?")
-                .setMessage("Os grupos que faltam NÃO serão processados e o app não continua sozinho. Para só suspender por um tempo, use Pausar.")
-                .setPositiveButton("Parar") { _, _ -> stopRun("Parado por você") }
-                .setNegativeButton("Voltar", null)
-                .show()
-        }
+        // Finalizar (faixa vermelha, visível em todas as abas): pede confirmação e encerra o que estiver em andamento
+        btnBannerStop.setOnClickListener { confirmFinalize() }
 
         btnRetry.setOnClickListener {
             if (failedLinks.isEmpty()) { Toast.makeText(this, "Nenhuma falha!", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
@@ -550,8 +551,8 @@ class MainActivity : AppCompatActivity() {
     // =====================================================================
 
     private fun startProcessing(existingList: MutableList<String>? = null) {
-        if (isRunning || runActive) {
-            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+        if (isRunning || runActive || scanInProgress) {
+            askFinalizeThen { startProcessing(existingList) }
             return
         }
         if (!requireAccessibility()) return
@@ -614,7 +615,8 @@ class MainActivity : AppCompatActivity() {
         ForegroundService.start(this)
         ForegroundService.clearAlert(this)
         applyServiceMode()
-        RunLog.add(this, "▶ Iniciado: ${Phase.label(phase)} (${linkList.size} grupos)")
+        RunRuntime.currentPkg = selectedPackage
+        RunLog.add(this, "▶ Iniciado: ${Phase.label(phase)} (${linkList.size} grupos, ${appName(selectedPackage)})")
         persistRun("WAIT", 60_000L)
     }
 
@@ -698,6 +700,7 @@ class MainActivity : AppCompatActivity() {
 
         applyServiceMode()
         RunRuntime.currentLink = link
+        RunRuntime.currentPkg = selectedPackage
         RunRuntime.groupSeq = System.currentTimeMillis()
         RunRuntime.groupDone = false
         persistRun("GROUP", groupBudgetMs())
@@ -776,17 +779,21 @@ class MainActivity : AppCompatActivity() {
     private fun readCooldownHours(): Int =
         (etCooldownHours.text.toString().trim().toIntOrNull() ?: 3).coerceIn(0, 720)
 
-    /** Mensagens: pula o grupo se a mensagem já foi enviada há pouco tempo. Devolve true se pulou. */
+    /**
+     * Mensagens: pula o grupo se a mensagem já foi enviada há pouco tempo POR ESTE MESMO WhatsApp.
+     * A conta é separada: um envio feito pelo WhatsApp errado não bloqueia o envio pelo certo.
+     * Devolve true se pulou.
+     */
     private fun skipIfSentRecently(link: String): Boolean {
         val horas = readCooldownHours()
         if (horas <= 0) return false
-        val ultimo = StorageManager.lastSent(this, link)
+        val ultimo = StorageManager.lastSent(this, link, selectedPackage)
         if (ultimo <= 0L) return false
         val idade = System.currentTimeMillis() - ultimo
         if (idade >= horas * 3_600_000L) return false
         val min = idade / 60_000L
         val faz = if (min >= 60) "${min / 60} h ${min % 60} min" else "$min min"
-        RunLog.add(this, "⏭ Mensagens ${currentIndex + 1}/${linkList.size}: pulado (já enviou há $faz; ajuste em Config)")
+        RunLog.add(this, "⏭ Mensagens ${currentIndex + 1}/${linkList.size}: pulado (já enviou pelo ${appName(selectedPackage)} há $faz; ajuste em Config)")
         RunRuntime.groupSeq = System.currentTimeMillis()
         RunRuntime.groupDone = true
         updateLinkStatus(currentIndex, "skipped_recent")
@@ -833,7 +840,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishRun(joined: Int, waiting: Int, failed: Int, msgSent: Int) {
         val fase = phase
-        btnStop.visibility = View.GONE
         runActive = false
         isRunning = false
         isPaused = false
@@ -852,6 +858,7 @@ class MainActivity : AppCompatActivity() {
         clearScreenFlags()
         RunLog.add(this, "✔ Concluído (${Phase.label(fase)}): ✅$joined entraram, 💬$msgSent mensagens, ⏳$waiting aguardando, ❌$failed falhas")
         renderIdleStatus()
+        updateRunBanner()
         if (switchNotifications.isChecked) {
             if (fase == Phase.MESSAGES) sendFinishedNotification("💬 $msgSent mensagens enviadas  ❌ $failed falharam")
             else sendFinishedNotification("✅ $joined entrou  ⏳ $waiting aguardando  ❌ $failed falhou")
@@ -1023,7 +1030,7 @@ class MainActivity : AppCompatActivity() {
             startedAt = runStartedAt
         )
         StorageManager.saveRun(this, snap)
-        btnStop.visibility = View.VISIBLE // enquanto há processo salvo, o Parar aparece
+        updateRunBanner() // enquanto há processo salvo, a faixa com o Finalizar aparece em todas as abas
         val linha = snap.summaryLine()
         ForegroundService.updateStatus(this, linha + " · " + timeNow())
         tvRunStatus.text = linha + "  ·  " + timeNow()
@@ -1087,9 +1094,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Finaliza TUDO o que estiver em andamento (entrada, mensagens, verificação ou escaneamento), mesmo sem ter terminado.
+     * O que já foi feito continua feito; o que faltava não é processado e nada recomeça sozinho.
+     */
     private fun stopRun(reason: String) {
-        btnStop.visibility = View.GONE
         cancelRunTimers()
+        // escaneamento em andamento: cancela também (o serviço derruba tudo o que estava agendado)
+        val estavaEscaneando = scanInProgress
+        if (scanInProgress) {
+            scanSafetyRunnable?.let { handler.removeCallbacks(it) }
+            scanSafetyRunnable = null
+            scanQueue.clear()
+            scanInProgress = false
+            btnScan.isEnabled = true
+        }
         GroupJoinerService.serviceInstance?.abortCurrent()
         runActive = false
         isRunning = false
@@ -1105,19 +1124,93 @@ class MainActivity : AppCompatActivity() {
         isLeavingGroup = false
         GroupJoinerService.serviceInstance?.clearMessageMode()
         GroupJoinerService.serviceInstance?.setCheckApproval(false)
+        GroupJoinerService.serviceInstance?.setLeaveMode(false)
         ForegroundService.stop(this)
         ForegroundService.clearAlert(this)
         clearScreenFlags()
+        // o grupo que estava em andamento volta a "pendente" (senão fica girando como se ainda estivesse rodando)
+        linkItems.forEachIndexed { i, item ->
+            if (item.status == "current") {
+                item.status = "pending"
+                item.countdown = ""
+                linkAdapter.notifyItemChanged(i)
+            }
+        }
         btnStart.isEnabled = true
         btnPause.visibility = View.GONE
         clearPauseUi()
-        tvCountdown.text = "⏹ Parado"
+        tvCountdown.text = "⏹ Finalizado"
         renderIdleStatus()
+        if (estavaEscaneando) renderScan()
+        updateRunBanner()
     }
 
-    /** Chamado pelo botão "Parar" da notificação. */
+    /** Chamado pelo botão "Finalizar" da notificação. */
     fun stopRunFromOutside() {
-        runOnUiThread { stopRun("Parado pelo botão da notificação") }
+        runOnUiThread { stopRun("Finalizado pelo botão da notificação") }
+    }
+
+    /** Uma linha dizendo o que está em andamento (faixa vermelha e caixas de confirmação). */
+    private fun busyDescription(): String {
+        if (scanInProgress) return "🔍 Escaneando as conversas do ${appName(selectedPackage)}"
+        val total = linkList.size
+        val pos = minOf(currentIndex + 1, total)
+        val base = "${Phase.label(phase)} · grupo $pos de $total · ${appName(selectedPackage)}"
+        return when {
+            pauseReason.isNotEmpty() -> "⚠ $pauseReason — $base"
+            isPaused -> "⏸ Pausado — $base"
+            else -> base
+        }
+    }
+
+    /** Mostra ou esconde a faixa vermelha "em andamento" (vale para todas as abas). */
+    private fun updateRunBanner() {
+        runOnUiThread {
+            val busy = isRunning || runActive || scanInProgress
+            if (busy) tvBannerStatus.text = busyDescription()
+            runBanner.visibility = if (busy) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** Botão Finalizar: pede confirmação e encerra o processo em andamento, mesmo sem ter terminado. */
+    private fun confirmFinalize() {
+        if (!(isRunning || runActive || scanInProgress)) {
+            updateRunBanner()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Finalizar agora?")
+            .setMessage(
+                "Em andamento: ${busyDescription()}\n\n" +
+                    "Os grupos que faltam NÃO serão processados e o app não continua sozinho. " +
+                    "O que já foi enviado continua enviado."
+            )
+            .setPositiveButton("Finalizar") { _, _ ->
+                if (isRunning || runActive || scanInProgress) stopRun("Finalizado por você")
+            }
+            .setNegativeButton("Voltar", null)
+            .show()
+    }
+
+    /**
+     * Já existe um processo em andamento e o usuário pediu outro: oferece finalizar o anterior (com confirmação)
+     * e, se aceitar, refaz o pedido novo na sequência (que mostra a sua própria confirmação).
+     */
+    private fun askFinalizeThen(action: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("Já há um processo em andamento")
+            .setMessage(
+                "${busyDescription()}\n\n" +
+                    "Para fazer este novo pedido, o anterior precisa terminar. Finalizar o anterior agora? " +
+                    "Os grupos que faltam nele NÃO serão processados; o que já foi enviado continua enviado."
+            )
+            .setPositiveButton("Finalizar o anterior") { _, _ ->
+                if (isRunning || runActive || scanInProgress) stopRun("Finalizado por você para fazer um novo pedido")
+                // dá um instante para o WhatsApp assentar antes do pedido novo
+                handler.postDelayed({ action() }, 800L)
+            }
+            .setNegativeButton("Voltar", null)
+            .show()
     }
 
     /**
@@ -1224,6 +1317,7 @@ class MainActivity : AppCompatActivity() {
             if (s == "invalid" || s == "error_env" || s == "admin_only") failedLinks.add(Pair(i, snap.links[i]))
         }
         RunRuntime.currentLink = linkList.getOrNull(currentIndex)
+        RunRuntime.currentPkg = selectedPackage
         applyServiceMode()
         tvLinkListTitle.text = when (snap.phase) {
             Phase.MESSAGES -> "💬 Enviando mensagens (${linkList.size})"
@@ -1240,6 +1334,7 @@ class MainActivity : AppCompatActivity() {
         acquireScreenLock()
         ForegroundService.start(this)
         RunLog.add(this, "↻ Estado restaurado: ${Phase.label(snap.phase)}, grupo ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}, etapa ${snap.stage}")
+        updateRunBanner()
     }
 
     /** Continua de onde parou: o grupo que estava em andamento conta como tentativa perdida. */
@@ -1288,8 +1383,8 @@ class MainActivity : AppCompatActivity() {
         autoCheckIntervalMs = intervalMin * 60 * 1000L
         approvalCheckRunnable = object : Runnable {
             override fun run() {
-                if (HistoryManager.pendingLinks.isNotEmpty() && !isRunning) {
-                    startApprovalCheck()
+                if (HistoryManager.pendingLinks.isNotEmpty() && !isRunning && !runActive && !scanInProgress) {
+                    startApprovalCheck(fromTimer = true)
                 }
                 handler.postDelayed(this, autoCheckIntervalMs)
             }
@@ -1303,14 +1398,15 @@ class MainActivity : AppCompatActivity() {
         approvalCheckRunnable = null
     }
 
-    private fun startApprovalCheck() {
+    private fun startApprovalCheck(fromTimer: Boolean = false) {
         val pending = HistoryManager.pendingLinks.toMutableList()
         if (pending.isEmpty()) {
             Toast.makeText(this, "Nenhum pedido pendente!", Toast.LENGTH_SHORT).show()
             return
         }
-        if (isRunning || runActive) {
-            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+        if (isRunning || runActive || scanInProgress) {
+            // a verificação automática (timer) nunca interrompe nada nem abre pergunta; só o pedido feito por você oferece finalizar
+            if (!fromTimer) askFinalizeThen { startApprovalCheck() }
             return
         }
 
@@ -1343,8 +1439,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Aba Mensagens: manda a mensagem nos grupos da lista, sem entrar em nenhum. */
     private fun startMessagesOnly() {
-        if (isRunning || runActive) {
-            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+        if (isRunning || runActive || scanInProgress) {
+            askFinalizeThen { startMessagesOnly() }
             return
         }
         if (!requireAccessibility()) return
@@ -1405,12 +1501,12 @@ class MainActivity : AppCompatActivity() {
     private fun appName(pkg: String): String = if (pkg == "com.whatsapp.w4b") "WhatsApp Business" else "WhatsApp"
 
     private fun startScan() {
-        if (isRunning || runActive) {
-            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+        if (scanInProgress) {
+            Toast.makeText(this, "O escaneamento já está em andamento. Para cancelar, use Finalizar (faixa vermelha).", Toast.LENGTH_LONG).show()
             return
         }
-        if (scanInProgress) {
-            Toast.makeText(this, "O escaneamento já está em andamento.", Toast.LENGTH_SHORT).show()
+        if (isRunning || runActive) {
+            askFinalizeThen { startScan() }
             return
         }
         if (!requireAccessibility()) return
@@ -1443,6 +1539,7 @@ class MainActivity : AppCompatActivity() {
         }
         val pkg = scanQueue.removeAt(0)
         selectedPackage = pkg
+        updateRunBanner()
         tvScanResult.text = "🔍 Escaneando o ${appName(pkg)}... o app abre o WhatsApp, vai ao topo, rola a lista até " +
             "embaixo e volta sozinho (pode levar até 3 minutos por WhatsApp). Não mexa no celular."
         scanSafetyRunnable?.let { handler.removeCallbacks(it) }
@@ -1480,6 +1577,7 @@ class MainActivity : AppCompatActivity() {
         scanInProgress = false
         scanQueue.clear()
         btnScan.isEnabled = true
+        updateRunBanner()
         if (!runActive) {
             wakeLock?.let { if (it.isHeld) it.release() }
             wakeLock = null

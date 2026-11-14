@@ -46,6 +46,23 @@
     </LinearLayout>
     <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#E0E0E0"/>
 
+    <!-- Faixa "em andamento": aparece em TODAS as abas enquanto houver processo (envio, entrada, verificação ou escaneamento). O Finalizar fica sempre à mão. -->
+    <LinearLayout android:id="@+id/runBanner" android:layout_width="match_parent"
+        android:layout_height="wrap_content" android:orientation="horizontal"
+        android:gravity="center_vertical" android:background="#FFEBEE"
+        android:paddingStart="10dp" android:paddingEnd="8dp"
+        android:paddingTop="6dp" android:paddingBottom="6dp" android:visibility="gone">
+        <TextView android:id="@+id/tvBannerStatus" android:layout_width="0dp"
+            android:layout_height="wrap_content" android:layout_weight="1"
+            android:text="" android:textSize="12sp" android:textColor="#B71C1C"
+            android:maxLines="3"/>
+        <Button android:id="@+id/btnBannerStop" android:layout_width="wrap_content"
+            android:layout_height="42dp" android:minWidth="0dp"
+            android:text="⏹ Finalizar" android:backgroundTint="#D32F2F"
+            android:textColor="#FFFFFF" android:textSize="13sp"
+            android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
     <!-- PAGE HOME -->
     <LinearLayout android:id="@+id/pageHome" android:layout_width="match_parent"
         android:layout_height="match_parent" android:orientation="vertical" android:visibility="visible">
@@ -114,11 +131,6 @@
                 <Button android:id="@+id/btnPause" android:layout_width="0dp"
                     android:layout_height="48dp" android:layout_weight="1"
                     android:text="⏸ Pausar" android:backgroundTint="#FF9800"
-                    android:textColor="#FFFFFF" android:textSize="14sp"
-                    android:layout_marginStart="5dp" android:visibility="gone"/>
-                <Button android:id="@+id/btnStop" android:layout_width="0dp"
-                    android:layout_height="48dp" android:layout_weight="1"
-                    android:text="⏹ Parar" android:backgroundTint="#D32F2F"
                     android:textColor="#FFFFFF" android:textSize="14sp"
                     android:layout_marginStart="5dp" android:visibility="gone"/>
             </LinearLayout>

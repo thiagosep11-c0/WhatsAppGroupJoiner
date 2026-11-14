@@ -197,8 +197,12 @@ object StorageManager {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(KEY_RUN).apply()
     }
 
-    // ---- Envios: para não mandar a mesma mensagem duas vezes no mesmo grupo ----
-    fun markSent(context: Context, link: String) {
+    // ---- Envios: para não mandar a mesma mensagem duas vezes no mesmo grupo PELO MESMO WhatsApp ----
+    // A chave inclui o WhatsApp (normal ou Business): são contas diferentes, então um envio feito pelo
+    // WhatsApp errado não bloqueia o envio pelo certo. Registros antigos (só o link, sem WhatsApp) deixam de valer.
+    private fun sentKey(pkg: String, link: String): String = "$pkg|$link"
+
+    fun markSent(context: Context, link: String, pkg: String) {
         try {
             val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
             val o = JSONObject(p.getString("sent_log", "{}") ?: "{}")
@@ -210,15 +214,15 @@ object StorageManager {
                 if (now - o.optLong(k, 0L) > 7L * 24 * 3_600_000L) velhos.add(k)
             }
             velhos.forEach { o.remove(it) }
-            o.put(link, now)
+            o.put(sentKey(pkg, link), now)
             p.edit().putString("sent_log", o.toString()).apply()
         } catch (e: Exception) { }
     }
 
-    fun lastSent(context: Context, link: String): Long {
+    fun lastSent(context: Context, link: String, pkg: String): Long {
         return try {
             val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
-            JSONObject(p.getString("sent_log", "{}") ?: "{}").optLong(link, 0L)
+            JSONObject(p.getString("sent_log", "{}") ?: "{}").optLong(sentKey(pkg, link), 0L)
         } catch (e: Exception) { 0L }
     }
 
