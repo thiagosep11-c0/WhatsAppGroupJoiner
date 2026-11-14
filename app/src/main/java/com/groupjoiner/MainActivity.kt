@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     // --- Tela inicial ---
     private lateinit var btnStart: Button
     private lateinit var btnPause: Button
+    private lateinit var btnStop: Button
     private lateinit var btnRetry: Button
     private lateinit var btnPermission: Button
     private lateinit var btnEditLinks: Button
@@ -82,6 +83,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvScanResult: TextView
     private lateinit var btnScanCopy: Button
     private var scanInProgress = false
+    private lateinit var radioAutoNormal: RadioButton
+    private lateinit var radioAutoBusiness: RadioButton
+    private lateinit var radioAutoBoth: RadioButton
+    private val scanQueue = mutableListOf<String>()
+    private var scanSkipNote = ""
+    private lateinit var radioMsgNormal: RadioButton
+    private lateinit var radioMsgBusiness: RadioButton
     private var scanSafetyRunnable: Runnable? = null
 
     // --- Aba Registro ---
@@ -235,6 +243,7 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         btnStart        = findViewById(R.id.btnStart)
         btnPause        = findViewById(R.id.btnPause)
+        btnStop         = findViewById(R.id.btnStop)
         btnRetry        = findViewById(R.id.btnRetry)
         btnPermission   = findViewById(R.id.btnPermission)
         btnEditLinks    = findViewById(R.id.btnEditLinks)
@@ -274,6 +283,11 @@ class MainActivity : AppCompatActivity() {
         btnScan         = findViewById(R.id.btnScan)
         tvScanResult    = findViewById(R.id.tvScanResult)
         btnScanCopy     = findViewById(R.id.btnScanCopy)
+        radioAutoNormal   = findViewById(R.id.radioAutoNormal)
+        radioAutoBusiness = findViewById(R.id.radioAutoBusiness)
+        radioAutoBoth     = findViewById(R.id.radioAutoBoth)
+        radioMsgNormal    = findViewById(R.id.radioMsgNormal)
+        radioMsgBusiness  = findViewById(R.id.radioMsgBusiness)
         tvLog           = findViewById(R.id.tvLog)
         scrollLog       = findViewById(R.id.scrollLog)
         btnLogRefresh   = findViewById(R.id.btnLogRefresh)
@@ -311,6 +325,7 @@ class MainActivity : AppCompatActivity() {
 
         btnPause.visibility = View.GONE
         btnRetry.visibility = View.GONE
+        btnStop.visibility = View.GONE
         etMaxGroups.setText("0")
     }
 
@@ -380,6 +395,15 @@ class MainActivity : AppCompatActivity() {
 
         btnPause.setOnClickListener {
             if (!isPaused) pauseRunByUser() else resumeAfterPause()
+        }
+
+        btnStop.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Parar de vez?")
+                .setMessage("Os grupos que faltam NÃO serão processados e o app não continua sozinho. Para só suspender por um tempo, use Pausar.")
+                .setPositiveButton("Parar") { _, _ -> stopRun("Parado por você") }
+                .setNegativeButton("Voltar", null)
+                .show()
         }
 
         btnRetry.setOnClickListener {
@@ -452,12 +476,18 @@ class MainActivity : AppCompatActivity() {
 
         btnMsgStart.setOnClickListener { startMessagesOnly() }
 
+        // O WhatsApp escolhido vale para tudo (Início e Por lista): as duas escolhas andam juntas
+        radioMsgNormal.isChecked = !radioBusiness.isChecked
+        radioMsgBusiness.isChecked = radioBusiness.isChecked
+        radioMsgNormal.setOnClickListener { radioNormal.isChecked = true }
+        radioMsgBusiness.setOnClickListener { radioBusiness.isChecked = true }
+        radioNormal.setOnCheckedChangeListener { _, marcado -> if (marcado) radioMsgNormal.isChecked = true }
+        radioBusiness.setOnCheckedChangeListener { _, marcado -> if (marcado) radioMsgBusiness.isChecked = true }
+
         // --- Maneira 2: escanear (só leitura) ---
         btnScan.setOnClickListener { startScan() }
         btnScanCopy.setOnClickListener {
-            val r = ScanStore.load(this)
-            val texto = if (r == null) "Nenhum escaneamento ainda."
-                else "Conversas lidas: ${r.rows.size}\nObservações: ${r.note}\n\n${r.diag}"
+            val texto = scanDiagnosticText()
             val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("diagnostico", texto))
             Toast.makeText(this, "Diagnóstico copiado (sem nomes)!", Toast.LENGTH_SHORT).show()
@@ -466,7 +496,7 @@ class MainActivity : AppCompatActivity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                renderScan(ScanStore.load(this@MainActivity))
+                renderScan()
             }
         })
 
@@ -803,6 +833,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishRun(joined: Int, waiting: Int, failed: Int, msgSent: Int) {
         val fase = phase
+        btnStop.visibility = View.GONE
         runActive = false
         isRunning = false
         isPaused = false
@@ -992,6 +1023,7 @@ class MainActivity : AppCompatActivity() {
             startedAt = runStartedAt
         )
         StorageManager.saveRun(this, snap)
+        btnStop.visibility = View.VISIBLE // enquanto há processo salvo, o Parar aparece
         val linha = snap.summaryLine()
         ForegroundService.updateStatus(this, linha + " · " + timeNow())
         tvRunStatus.text = linha + "  ·  " + timeNow()
@@ -1056,6 +1088,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun stopRun(reason: String) {
+        btnStop.visibility = View.GONE
         cancelRunTimers()
         GroupJoinerService.serviceInstance?.abortCurrent()
         runActive = false
@@ -1325,10 +1358,20 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Escreva a mensagem primeiro.", Toast.LENGTH_LONG).show()
             return
         }
-        selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
-        saveSavedSettings()
-        showTab("home")
-        beginMessages(links, msg)
+        // confirmação: mostra em qual WhatsApp vai sair, para quantos grupos e o começo da mensagem
+        val app = if (radioMsgBusiness.isChecked) "WhatsApp Business" else "WhatsApp"
+        val previa = if (msg.length > 120) msg.take(120) + "…" else msg
+        AlertDialog.Builder(this)
+            .setTitle("Enviar para ${links.size} grupos?")
+            .setMessage("Pelo $app.\n\nMensagem:\n$previa")
+            .setPositiveButton("Enviar") { _, _ ->
+                selectedPackage = if (radioMsgBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
+                saveSavedSettings()
+                showTab("home")
+                beginMessages(links, msg)
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     private fun beginMessages(links: List<String>, message: String) {
@@ -1354,6 +1397,13 @@ class MainActivity : AppCompatActivity() {
     private fun readMaxUnread(): Int =
         (etMaxUnread.text.toString().trim().toIntOrNull() ?: 0).coerceIn(0, 999)
 
+    /** Intent para abrir o app; se o sistema não enxergar o pacote, tenta pelo nome do pacote mesmo assim. */
+    private fun launchIntentFor(pkg: String): Intent =
+        packageManager.getLaunchIntentForPackage(pkg)
+            ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(pkg)
+
+    private fun appName(pkg: String): String = if (pkg == "com.whatsapp.w4b") "WhatsApp Business" else "WhatsApp"
+
     private fun startScan() {
         if (isRunning || runActive) {
             Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
@@ -1364,58 +1414,87 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (!requireAccessibility()) return
-        val svc = GroupJoinerService.serviceInstance
-        if (svc == null) {
+        if (GroupJoinerService.serviceInstance == null) {
             Toast.makeText(this, "Serviço de acessibilidade desligado.", Toast.LENGTH_LONG).show()
             return
         }
-        selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
-        val abrir = packageManager.getLaunchIntentForPackage(selectedPackage)
-        if (abrir == null) {
-            Toast.makeText(this, "WhatsApp não encontrado neste celular.", Toast.LENGTH_LONG).show()
-            return
+        // quais WhatsApp escanear (escolha da aba Automático)
+        val quais = when {
+            radioAutoNormal.isChecked -> listOf("com.whatsapp")
+            radioAutoBusiness.isChecked -> listOf("com.whatsapp.w4b")
+            else -> listOf("com.whatsapp", "com.whatsapp.w4b")
         }
+        scanQueue.clear()
+        scanQueue.addAll(quais)
+        scanSkipNote = ""
         scanInProgress = true
         btnScan.isEnabled = false
-        tvScanResult.text = "🔍 Escaneando... o app abre o WhatsApp, lê a lista de conversas e volta sozinho " +
-            "(pode levar até 3 minutos). Não mexa no celular."
-        RunLog.add(this, "🔍 Escaneamento iniciado ($selectedPackage)")
         acquireScreenLock()
+        RunLog.add(this, "🔍 Escaneamento iniciado: " + quais.joinToString(" + ") { appName(it) })
+        scanNext()
+    }
+
+    /** Escaneia o próximo WhatsApp da fila; quando a fila acaba, mostra o resultado. */
+    private fun scanNext() {
+        val svc = GroupJoinerService.serviceInstance
+        if (svc == null || scanQueue.isEmpty()) {
+            onScanFinished()
+            return
+        }
+        val pkg = scanQueue.removeAt(0)
+        selectedPackage = pkg
+        tvScanResult.text = "🔍 Escaneando o ${appName(pkg)}... o app abre o WhatsApp, vai ao topo, rola a lista até " +
+            "embaixo e volta sozinho (pode levar até 3 minutos por WhatsApp). Não mexa no celular."
         scanSafetyRunnable?.let { handler.removeCallbacks(it) }
-        val r = Runnable { if (scanInProgress) onScanFinished() }
+        val r = Runnable {
+            if (scanInProgress) {
+                scanQueue.clear()
+                onScanFinished()
+            }
+        }
         scanSafetyRunnable = r
         handler.postDelayed(r, 200_000L)
+        val abrir = launchIntentFor(pkg)
         abrir.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         try {
             startActivity(abrir)
         } catch (e: Exception) {
-            RunLog.add(this, "⚠ Não consegui abrir o WhatsApp: ${e.message}")
+            // não abriu: esse WhatsApp não está instalado neste celular
+            RunLog.add(this, "⚠ ${appName(pkg)} não encontrado neste celular (${e.message})")
+            scanSkipNote += (if (scanSkipNote.isEmpty()) "" else "; ") + "${appName(pkg)} não está instalado"
+            scanNext()
+            return
         }
-        svc.startScan()
+        svc.startScan(pkg)
     }
 
-    /** O serviço terminou (ou o tempo esgotou): mostra o resultado na aba Mensagens. */
+    /** O serviço terminou um WhatsApp (ou o tempo esgotou): segue para o próximo da fila ou mostra o resultado. */
     private fun onScanFinished() {
+        if (scanInProgress && scanQueue.isNotEmpty() && GroupJoinerService.serviceInstance != null) {
+            scanNext()
+            return
+        }
         scanSafetyRunnable?.let { handler.removeCallbacks(it) }
         scanSafetyRunnable = null
         val estava = scanInProgress
         scanInProgress = false
+        scanQueue.clear()
         btnScan.isEnabled = true
         if (!runActive) {
             wakeLock?.let { if (it.isHeld) it.release() }
             wakeLock = null
         }
         showTab("auto")
-        renderScan(ScanStore.load(this))
+        renderScan()
         if (estava) Toast.makeText(this, "Escaneamento concluído", Toast.LENGTH_SHORT).show()
     }
 
-    private fun scanText(r: ScanResult): String {
+    private fun scanText(nome: String, r: ScanResult): String {
         val limite = readMaxUnread()
         val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(r.finishedAt))
         val dentro = r.rows.count { it.unread <= limite }
         val sb = StringBuilder()
-        sb.append("Lido às $hora: ${r.rows.size} conversas\n")
+        sb.append("📱 $nome — lido às $hora: ${r.rows.size} conversas\n")
         sb.append("✅ $dentro com até $limite não lidas (receberiam a mensagem)\n")
         sb.append("⏭ ${r.rows.size - dentro} com mais (seriam puladas)\n")
         if (r.note.isNotEmpty()) sb.append("ℹ ${r.note}\n")
@@ -1428,9 +1507,27 @@ class MainActivity : AppCompatActivity() {
         return sb.toString()
     }
 
-    private fun renderScan(r: ScanResult?) {
+    /** Último escaneamento de cada WhatsApp (normal e Business) que já foi feito. */
+    private fun scanResults(): List<Pair<String, ScanResult>> =
+        listOf("com.whatsapp", "com.whatsapp.w4b").mapNotNull { pkg ->
+            ScanStore.load(this, pkg)?.let { appName(pkg) to it }
+        }
+
+    private fun renderScan() {
         if (scanInProgress) return
-        tvScanResult.text = if (r == null) "Nenhum escaneamento ainda." else scanText(r)
+        val partes = scanResults()
+        val texto = if (partes.isEmpty()) "Nenhum escaneamento ainda."
+            else partes.joinToString("\n\n") { (nome, r) -> scanText(nome, r) }
+        tvScanResult.text = if (scanSkipNote.isNotEmpty()) "$texto\n\nℹ $scanSkipNote" else texto
+    }
+
+    /** Texto do botão "Copiar diagnóstico": só estrutura da tela e contagens, sem nomes de grupos nem mensagens. */
+    private fun scanDiagnosticText(): String {
+        val partes = scanResults()
+        if (partes.isEmpty()) return "Nenhum escaneamento ainda."
+        return partes.joinToString("\n\n") { (nome, r) ->
+            "=== $nome ===\nConversas lidas: ${r.rows.size}\nObservações: ${r.note}\n\n${r.diag}"
+        }
     }
 
     private fun readTypingWpm(): Int =
@@ -1463,7 +1560,14 @@ class MainActivity : AppCompatActivity() {
         etCooldownHours.setText(StorageManager.getPref(this, "cfg_cooldown", "3"))
         editMsgLinks.setText(StorageManager.getPref(this, "msg_links"))
         etMsgOnly.setText(StorageManager.getPref(this, "msg_text"))
+        // qual WhatsApp estava escolhido (normal ou Business) fica lembrado
+        if (StorageManager.getPref(this, "wa_app") == "business") radioBusiness.isChecked = true else radioNormal.isChecked = true
         etMaxUnread.setText(StorageManager.getPref(this, "max_unread", "0"))
+        when (StorageManager.getPref(this, "auto_app", "both")) {
+            "normal" -> radioAutoNormal.isChecked = true
+            "business" -> radioAutoBusiness.isChecked = true
+            else -> radioAutoBoth.isChecked = true
+        }
         updateMsgLinkCount()
     }
 
@@ -1473,7 +1577,12 @@ class MainActivity : AppCompatActivity() {
         StorageManager.setPref(this, "cfg_cooldown", readCooldownHours().toString())
         StorageManager.setPref(this, "msg_links", editMsgLinks.text.toString())
         StorageManager.setPref(this, "msg_text", etMsgOnly.text.toString())
+        StorageManager.setPref(this, "wa_app", if (radioBusiness.isChecked) "business" else "normal")
         StorageManager.setPref(this, "max_unread", readMaxUnread().toString())
+        StorageManager.setPref(
+            this, "auto_app",
+            if (radioAutoNormal.isChecked) "normal" else if (radioAutoBusiness.isChecked) "business" else "both"
+        )
     }
 
     // =====================================================================
@@ -1531,7 +1640,7 @@ class MainActivity : AppCompatActivity() {
         }
         if (tab == "log") refreshLogView()
         if (tab == "messages") updateMsgLinkCount()
-        if (tab == "auto") renderScan(ScanStore.load(this))
+        if (tab == "auto") renderScan()
         if (tab == "history") updateHistoryCount()
     }
 

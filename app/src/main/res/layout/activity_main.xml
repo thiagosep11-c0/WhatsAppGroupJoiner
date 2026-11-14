@@ -116,6 +116,11 @@
                     android:text="⏸ Pausar" android:backgroundTint="#FF9800"
                     android:textColor="#FFFFFF" android:textSize="14sp"
                     android:layout_marginStart="5dp" android:visibility="gone"/>
+                <Button android:id="@+id/btnStop" android:layout_width="0dp"
+                    android:layout_height="48dp" android:layout_weight="1"
+                    android:text="⏹ Parar" android:backgroundTint="#D32F2F"
+                    android:textColor="#FFFFFF" android:textSize="14sp"
+                    android:layout_marginStart="5dp" android:visibility="gone"/>
             </LinearLayout>
 
             <Button android:id="@+id/btnRetry" android:layout_width="match_parent"
@@ -233,9 +238,23 @@
                 android:text="💬 Enviar mensagens (sem entrar em grupos)" android:textSize="15sp"
                 android:textStyle="bold" android:textColor="#333333" android:layout_marginBottom="6dp"/>
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="Cole os links dos grupos onde você JÁ está, um por linha. O app abre cada grupo e envia a mensagem, com a digitação e as pausas da aba Config. Usa o WhatsApp escolhido na aba Início."
+                android:text="Cole os links dos grupos onde você JÁ está, um por linha. O app abre cada grupo e envia a mensagem, com a digitação e as pausas da aba Config. Escolha abaixo em qual WhatsApp enviar."
                 android:textSize="12sp" android:textColor="#666666" android:background="#F5F5F5"
                 android:padding="10dp" android:layout_marginBottom="12dp"/>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Qual WhatsApp vai enviar?" android:textSize="13sp" android:textStyle="bold"
+                android:textColor="#333333" android:layout_marginBottom="4dp"/>
+            <RadioGroup android:id="@+id/radioMsgGroup" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="horizontal"
+                android:layout_marginBottom="12dp">
+                <RadioButton android:id="@+id/radioMsgNormal" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WhatsApp" android:checked="true" android:textSize="13sp"/>
+                <RadioButton android:id="@+id/radioMsgBusiness" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WA Business" android:textSize="13sp"/>
+            </RadioGroup>
 
             <EditText android:id="@+id/editMsgLinks" android:layout_width="match_parent"
                 android:layout_height="160dp" android:gravity="top" android:inputType="textMultiLine"
@@ -306,6 +325,23 @@
                     android:background="@drawable/edittext_border" android:padding="8dp"
                     android:textSize="13sp" android:gravity="center"/>
             </LinearLayout>
+
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Qual WhatsApp escanear?" android:textSize="13sp" android:textColor="#555555"
+                android:layout_marginBottom="4dp"/>
+            <RadioGroup android:id="@+id/radioAutoGroup" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="horizontal"
+                android:layout_marginBottom="10dp">
+                <RadioButton android:id="@+id/radioAutoNormal" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WhatsApp" android:textSize="13sp"/>
+                <RadioButton android:id="@+id/radioAutoBusiness" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="WA Business" android:textSize="13sp"/>
+                <RadioButton android:id="@+id/radioAutoBoth" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Os dois" android:checked="true" android:textSize="13sp"/>
+            </RadioGroup>
 
             <Button android:id="@+id/btnScan" android:layout_width="match_parent"
                 android:layout_height="46dp" android:text="🔍 Escanear grupos do WhatsApp"

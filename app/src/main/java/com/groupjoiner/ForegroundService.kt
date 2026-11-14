@@ -161,6 +161,7 @@ class ForegroundService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             RunLog.add(this, "⏹ Parado pelo botão da notificação")
+            GroupJoinerService.serviceInstance?.abortCurrent() // não deixa terminar de digitar/enviar o grupo atual
             StorageManager.clearRun(this)
             MainActivity.instance?.stopRunFromOutside()
             clearAlert(this)
@@ -188,14 +189,18 @@ class ForegroundService : Service() {
     // ---------------- Vigia ----------------
 
     /** Mantém a CPU (sempre) e a tela (se [screen]) acordadas. As travas vencem sozinhas se o serviço morrer. */
-    private fun holdLocks(screen: Boolean) {
+    private fun holdLocks(screen: Boolean, cpu: Boolean = true) {
         try {
             val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (wakeLock == null) {
-                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OnGroups:ServiceWakeLock")
-                    .also { it.setReferenceCounted(false) }
+            if (cpu) {
+                if (wakeLock == null) {
+                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "OnGroups:ServiceWakeLock")
+                        .also { it.setReferenceCounted(false) }
+                }
+                wakeLock?.acquire(15 * 60 * 1000L)
+            } else {
+                wakeLock?.let { if (it.isHeld) it.release() } // pausado ou sem processo: não gasta bateria à toa
             }
-            wakeLock?.acquire(15 * 60 * 1000L)
             if (screen) {
                 if (screenLock == null) {
                     screenLock = pm.newWakeLock(
@@ -213,7 +218,7 @@ class ForegroundService : Service() {
     private fun watchdogTick() {
         val snap = StorageManager.loadRun(this)
         if (snap == null || !snap.active) {
-            holdLocks(false)
+            holdLocks(screen = false, cpu = false)
             idleTicks++
             if (idleTicks >= 8) stopSelf() // ~2 min sem nada rodando
             return
@@ -222,7 +227,7 @@ class ForegroundService : Service() {
         val now = System.currentTimeMillis()
         val paused = snap.pauseReason.isNotEmpty()
 
-        holdLocks(!paused)
+        holdLocks(screen = !paused, cpu = !paused)
         updateStatus(this, snap.summaryLine() + " · " + hora(snap.progressAt))
 
         if (snap.progressAt != lastProgressSeen) {
@@ -232,8 +237,10 @@ class ForegroundService : Service() {
 
         if (paused) {
             // pausas automáticas se resolvem sozinhas: tela liberada ou serviço de acessibilidade de volta
-            val libera = (snap.pauseReason.startsWith(PAUSE_SCREEN) && ScreenGuard.isReady(this)) ||
-                (snap.pauseReason.startsWith(PAUSE_SERVICE) && GroupJoinerService.serviceInstance != null)
+            // só retoma sozinho se a pausa for recente (tela: até 3 h; serviço desligado: até 30 min); depois disso espera você
+            val idade = now - snap.progressAt
+            val libera = (snap.pauseReason.startsWith(PAUSE_SCREEN) && idade < 3 * 3_600_000L && ScreenGuard.isReady(this)) ||
+                (snap.pauseReason.startsWith(PAUSE_SERVICE) && idade < 30 * 60_000L && GroupJoinerService.serviceInstance != null)
             if (libera) {
                 RunLog.add(this, "🔓 Pausa resolvida: ${snap.pauseReason.take(50)}. Continuando")
                 StorageManager.saveRun(this, snap.copy(pauseReason = "", progressAt = now, expectedBy = now + 90_000L))

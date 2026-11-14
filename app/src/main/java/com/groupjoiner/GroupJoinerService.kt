@@ -429,6 +429,7 @@ class GroupJoinerService : AccessibilityService() {
     private val scanRows = LinkedHashMap<String, ScanRow>()
     private val scanNotes = mutableListOf<String>()
     private var scanDiag = ""
+    private var scanPkg = ""
     private var scanPass = 0
     private var scanNoNew = 0
     private var scanChipClicked = false
@@ -440,8 +441,9 @@ class GroupJoinerService : AccessibilityService() {
     private val unreadRe1 = Regex("""(\d+)\s+(?:mensagens?|messages?)\s+(?:nao\s+lidas?|unread)""")
     private val unreadRe2 = Regex("""(\d+)\s+unread""")
 
-    fun startScan() {
+    fun startScan(pkg: String) {
         if (scanning) return
+        scanPkg = pkg
         isActive = false
         cancelAll()
         scanning = true
@@ -480,6 +482,7 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun isWhatsAppRoot(root: AccessibilityNodeInfo): Boolean {
         val pkg = root.packageName?.toString() ?: ""
+        if (scanPkg.isNotEmpty()) return pkg == scanPkg // durante o escaneamento só vale o WhatsApp escolhido
         return pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b"
     }
 
@@ -506,9 +509,10 @@ class GroupJoinerService : AccessibilityService() {
             }
             if (attempt == 3 || attempt == 6) {
                 try {
-                    val i = packageManager.getLaunchIntentForPackage(MainActivity.selectedPackage)
-                    i?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    i?.let { startActivity(it) }
+                    val i = packageManager.getLaunchIntentForPackage(scanPkg)
+                        ?: Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(scanPkg)
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(i)
                 } catch (e: Exception) {}
             }
             scheduleScan(1_500L) { scanPrepare(attempt + 1) }
@@ -768,7 +772,8 @@ class GroupJoinerService : AccessibilityService() {
         scanTimeout = null
         val rows = scanRows.values.toList()
         val nota = scanNotes.joinToString("; ")
-        try { ScanStore.save(applicationContext, ScanResult(rows, nota, scanDiag, System.currentTimeMillis())) } catch (e: Exception) {}
+        try { ScanStore.save(applicationContext, scanPkg, ScanResult(rows, nota, scanDiag, System.currentTimeMillis())) } catch (e: Exception) {}
+        scanPkg = ""
         RunLog.add(applicationContext, "🔍 Escaneamento concluído: ${rows.size} conversas lidas" + (if (nota.isNotEmpty()) " ($nota)" else ""))
         try {
             val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")

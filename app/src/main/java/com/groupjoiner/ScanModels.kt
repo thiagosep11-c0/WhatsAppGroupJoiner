@@ -10,11 +10,11 @@ data class ScanRow(val name: String, val unread: Int, val approx: Boolean)
 /** Resultado de um escaneamento (só leitura): conversas, observações e um diagnóstico sem nomes. */
 data class ScanResult(val rows: List<ScanRow>, val note: String, val diag: String, val finishedAt: Long)
 
-/** Guarda o último escaneamento (fica salvo mesmo se o app for fechado). */
+/** Guarda o último escaneamento de CADA WhatsApp (normal e Business); fica salvo mesmo se o app for fechado. */
 object ScanStore {
-    private const val KEY = "scan_last"
+    private fun key(pkg: String) = "scan_last_" + pkg.replace('.', '_')
 
-    fun save(context: Context, r: ScanResult) {
+    fun save(context: Context, pkg: String, r: ScanResult) {
         try {
             val arr = JSONArray()
             r.rows.forEach { row ->
@@ -29,12 +29,12 @@ object ScanStore {
             o.put("note", r.note)
             o.put("diag", r.diag)
             o.put("at", r.finishedAt)
-            StorageManager.setPref(context, KEY, o.toString())
+            StorageManager.setPref(context, key(pkg), o.toString())
         } catch (e: Exception) { }
     }
 
-    fun load(context: Context): ScanResult? {
-        val json = StorageManager.getPref(context, KEY, "")
+    fun load(context: Context, pkg: String): ScanResult? {
+        val json = StorageManager.getPref(context, key(pkg), "")
         if (json.isEmpty()) return null
         return try {
             val o = JSONObject(json)
