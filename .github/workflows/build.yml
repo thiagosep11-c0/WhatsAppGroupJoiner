@@ -59,13 +59,3 @@ jobs:
         with:
           name: GroupJoiner-APK
           path: app/build/outputs/apk/debug/app-debug.apk
-
-      - name: Diagnóstico da chave (temporário)
-        if: always()
-        run: |
-          echo "HOME=$HOME  user=$(id -un)"
-          env | grep -E '^(ANDROID|XDG|GRADLE_USER|DEBUG_KEYSTORE_FILE)' || true
-          for f in $(find /home /root /tmp /opt /usr/local -name 'debug.keystore' 2>/dev/null); do
-            echo "== $f"
-            keytool -list -keystore "$f" -storepass android 2>&1 | grep -E 'fingerprint' || true
-          done
