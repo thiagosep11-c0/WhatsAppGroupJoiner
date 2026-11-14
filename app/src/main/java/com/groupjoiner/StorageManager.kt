@@ -139,6 +139,97 @@ object StorageManager {
             pauseMax = p.getInt("pause_max", 20)
         )
     }
+
+    // ---- Processo em andamento (fase, grupo, resultados): salvo a cada passo ----
+    private const val KEY_RUN = "run_snapshot"
+
+    fun saveRun(context: Context, s: RunSnapshot) {
+        try {
+            val o = JSONObject()
+            o.put("active", s.active)
+            o.put("phase", s.phase)
+            o.put("links", JSONArray(s.links))
+            o.put("statuses", JSONArray(s.statuses))
+            o.put("index", s.index)
+            o.put("stage", s.stage)
+            o.put("groupSeq", s.groupSeq)
+            o.put("attempt", s.attempt)
+            o.put("message", s.message)
+            o.put("pkg", s.pkg)
+            o.put("progressAt", s.progressAt)
+            o.put("expectedBy", s.expectedBy)
+            o.put("pauseReason", s.pauseReason)
+            o.put("startedAt", s.startedAt)
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putString(KEY_RUN, o.toString()).apply()
+        } catch (e: Exception) { }
+    }
+
+    fun loadRun(context: Context): RunSnapshot? {
+        val json = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getString(KEY_RUN, null) ?: return null
+        return try {
+            val o = JSONObject(json)
+            val la = o.getJSONArray("links")
+            val links = List(la.length()) { la.getString(it) }
+            val sa = o.getJSONArray("statuses")
+            val st = List(sa.length()) { sa.getString(it) }
+            RunSnapshot(
+                active = o.optBoolean("active", false),
+                phase = o.optString("phase", Phase.JOIN),
+                links = links,
+                statuses = if (st.size == links.size) st else List(links.size) { "" },
+                index = o.optInt("index", 0),
+                stage = o.optString("stage", "WAIT"),
+                groupSeq = o.optLong("groupSeq", 0L),
+                attempt = o.optInt("attempt", 1),
+                message = o.optString("message", ""),
+                pkg = o.optString("pkg", "com.whatsapp"),
+                progressAt = o.optLong("progressAt", 0L),
+                expectedBy = o.optLong("expectedBy", 0L),
+                pauseReason = o.optString("pauseReason", ""),
+                startedAt = o.optLong("startedAt", 0L)
+            )
+        } catch (e: Exception) { null }
+    }
+
+    fun clearRun(context: Context) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit().remove(KEY_RUN).apply()
+    }
+
+    // ---- Envios: para não mandar a mesma mensagem duas vezes no mesmo grupo ----
+    fun markSent(context: Context, link: String) {
+        try {
+            val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            val o = JSONObject(p.getString("sent_log", "{}") ?: "{}")
+            val now = System.currentTimeMillis()
+            val velhos = mutableListOf<String>()
+            val iter = o.keys()
+            while (iter.hasNext()) {
+                val k = iter.next()
+                if (now - o.optLong(k, 0L) > 7L * 24 * 3_600_000L) velhos.add(k)
+            }
+            velhos.forEach { o.remove(it) }
+            o.put(link, now)
+            p.edit().putString("sent_log", o.toString()).apply()
+        } catch (e: Exception) { }
+    }
+
+    fun lastSent(context: Context, link: String): Long {
+        return try {
+            val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            JSONObject(p.getString("sent_log", "{}") ?: "{}").optLong(link, 0L)
+        } catch (e: Exception) { 0L }
+    }
+
+    // ---- Preferências simples (arquivo de ajustes, não apagado por "Limpar histórico") ----
+    fun setPref(context: Context, key: String, value: String) {
+        context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE).edit().putString(key, value).apply()
+    }
+
+    fun getPref(context: Context, key: String, def: String = ""): String {
+        return context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE).getString(key, def) ?: def
+    }
 }
 
 data class TypingSettings(val human: Boolean, val wpm: Int, val pauseMin: Int, val pauseMax: Int)

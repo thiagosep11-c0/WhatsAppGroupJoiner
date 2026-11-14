@@ -3,6 +3,35 @@ package com.groupjoiner
 import java.text.SimpleDateFormat
 import java.util.*
 
+/** Ícone e texto de cada status (usado no histórico). */
+object StatusInfo {
+    fun icon(status: String): String = when (status) {
+        "joined"         -> "✅"
+        "requested"      -> "⏳"
+        "pending"        -> "🔒"
+        "already_member" -> "👥"
+        "message_sent"   -> "💬"
+        "admin_only"     -> "👑"
+        "left_group"     -> "🚪"
+        "skipped_recent" -> "⏭"
+        "error_env"      -> "⚠️"
+        else             -> "❌"
+    }
+
+    fun text(status: String): String = when (status) {
+        "joined"         -> "Entrou no grupo"
+        "requested"      -> "Pedido enviado"
+        "pending"        -> "Aguardando liberação"
+        "already_member" -> "Já é membro"
+        "message_sent"   -> "Mensagem enviada"
+        "admin_only"     -> "Só admin pode enviar"
+        "left_group"     -> "Saiu do grupo (admin)"
+        "skipped_recent" -> "Pulado (enviado há pouco)"
+        "error_env"      -> "Falha: tela/WhatsApp"
+        else             -> "Inválido / Erro"
+    }
+}
+
 data class HistoryEntry(
     val number: Int,
     val link: String,
@@ -16,22 +45,10 @@ data class HistoryEntry(
         get() = if (link.length > 40) "...${link.takeLast(37)}" else link
 
     val statusIcon: String
-        get() = when (status) {
-            "joined"         -> "✅"
-            "requested"      -> "⏳"
-            "pending"        -> "🔒"
-            "already_member" -> "👥"
-            else             -> "❌"
-        }
+        get() = StatusInfo.icon(status)
 
     val statusText: String
-        get() = when (status) {
-            "joined"         -> "Entrou no grupo"
-            "requested"      -> "Pedido enviado"
-            "pending"        -> "Aguardando liberação"
-            "already_member" -> "Já é membro"
-            else             -> "Inválido / Erro"
-        }
+        get() = StatusInfo.text(status)
 }
 
 object HistoryManager {

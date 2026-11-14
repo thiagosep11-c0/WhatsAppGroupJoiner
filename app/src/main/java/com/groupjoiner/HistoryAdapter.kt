@@ -31,8 +31,9 @@ class HistoryAdapter(private val entries: List<HistoryEntry>) :
         holder.tvTime.text = entry.timeFormatted
 
         val bgColor = when (entry.status) {
-            "success" -> Color.parseColor("#E8F5E9")
-            "invalid" -> Color.parseColor("#FFF8E1")
+            "joined", "message_sent", "already_member" -> Color.parseColor("#E8F5E9")
+            "requested", "pending", "skipped_recent" -> Color.parseColor("#E3F2FD")
+            "admin_only", "left_group", "error_env" -> Color.parseColor("#FFF3E0")
             else -> Color.parseColor("#FFEBEE")
         }
         holder.itemView.setBackgroundColor(bgColor)

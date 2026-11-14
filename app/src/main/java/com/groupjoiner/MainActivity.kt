@@ -1,30 +1,40 @@
 package com.groupjoiner
 
+import android.app.KeyguardManager
 import android.app.NotificationChannel
-import android.os.PowerManager
 import android.app.NotificationManager
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.res.ColorStateList
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.Settings
 import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : AppCompatActivity() {
 
+    // --- Tela inicial ---
     private lateinit var btnStart: Button
     private lateinit var btnPause: Button
     private lateinit var btnRetry: Button
@@ -33,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvLinkCount: TextView
     private lateinit var tvCountdown: TextView
     private lateinit var tvProgress: TextView
+    private lateinit var tvRunStatus: TextView
     private lateinit var tvLinkListTitle: TextView
     private lateinit var progressBar: ProgressBar
     private lateinit var radioNormal: RadioButton
@@ -44,13 +55,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnClearLinks: Button
     private lateinit var pageEditLinks: View
 
+    // --- Abas ---
     private lateinit var tabHome: TextView
+    private lateinit var tabMessages: TextView
     private lateinit var tabHistory: TextView
+    private lateinit var tabLog: TextView
     private lateinit var tabSettings: TextView
     private lateinit var pageHome: View
+    private lateinit var pageMessages: View
     private lateinit var pageHistory: View
+    private lateinit var pageLog: View
     private lateinit var pageSettings: View
 
+    // --- Aba Mensagens ---
+    private lateinit var editMsgLinks: EditText
+    private lateinit var etMsgOnly: EditText
+    private lateinit var tvMsgLinkCount: TextView
+    private lateinit var btnMsgPaste: Button
+    private lateinit var btnMsgFromHistory: Button
+    private lateinit var btnMsgClear: Button
+    private lateinit var btnMsgStart: Button
+
+    // --- Aba Registro ---
+    private lateinit var tvLog: TextView
+    private lateinit var scrollLog: ScrollView
+    private lateinit var btnLogRefresh: Button
+    private lateinit var btnLogCopy: Button
+    private lateinit var btnLogClear: Button
+
+    // --- Histórico e lista ---
     private lateinit var recyclerHistory: RecyclerView
     private lateinit var recyclerLinks: RecyclerView
     private lateinit var tvHistoryCount: TextView
@@ -59,6 +92,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var linkAdapter: LinkAdapter
     private val linkItems = mutableListOf<LinkItem>()
 
+    // --- Config ---
     private lateinit var etMaxGroups: EditText
     private lateinit var etInterval1: EditText
     private lateinit var etInterval2: EditText
@@ -74,6 +108,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etTypingWpm: EditText
     private lateinit var etPauseMin: EditText
     private lateinit var etPauseMax: EditText
+    private lateinit var etCooldownHours: EditText
+    private lateinit var btnBattery: Button
+
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
     private var isCheckingApproval = false
@@ -87,17 +124,41 @@ class MainActivity : AppCompatActivity() {
     private var failedLinks = mutableListOf<Pair<Int, String>>()
     private var currentIndex = 0
     private var countdownRunnable: Runnable? = null
+    private var screenWaitRunnable: Runnable? = null
+    private var chainRunnable: Runnable? = null
     private var isPaused = false
     private var isRunning = false
     private var processed = false
     private var maxGroups = 0
     private val defaultIntervals = listOf(5_000L, 30_000L, 40_000L, 50_000L, 60_000L)
 
+    // --- Estado do processo (salvo a cada passo em um RunSnapshot) ---
+    private var phase = Phase.JOIN
+    private var lastRunPhase = Phase.JOIN
+    private var lastRunMessage = ""
+    private var runMessage = ""
+    private var runActive = false
+    private var stage = "WAIT"          // GROUP = grupo em andamento; WAIT = esperando o próximo
+    private var attempt = 1
+    private var envFailures = 0
+    private var screenWaits = 0
+    private var pauseReason = ""
+    private var runStartedAt = 0L
+
     companion object {
         var instance: MainActivity? = null
         var selectedPackage = "com.whatsapp"
         const val CHANNEL_ID = "group_joiner_channel"
+        const val EXTRA_STATUS = "grp_status"
+        const val EXTRA_SEQ = "grp_seq"
+        const val EXTRA_RECOVER = "recover"
+        const val MAX_ATTEMPTS = 3
+        const val STALE_MS = 15 * 60 * 1000L
     }
+
+    // =====================================================================
+    // Ciclo de vida
+    // =====================================================================
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,16 +167,61 @@ class MainActivity : AppCompatActivity() {
         createNotificationChannel()
         bindViews()
         loadTypingSettings()
+        loadSavedSettings()
         setupTabs()
         setupButtons()
+        showTab("home")
         // Carregar histórico e pendentes salvos
         StorageManager.loadHistory(this)
         StorageManager.loadPendingLinks(this)
         historyAdapter.notifyDataSetChanged()
         updateHistoryCount()
-        // Verificar se há processo para retomar
-        checkResumeState()
+        askNotificationPermission()
+        renderIdleStatus()
+        // Se havia um processo em andamento (ou o sistema reabriu o app com um resultado), continua de onde parou
+        handleIncoming(intent)
+        handler.postDelayed({ maybeAskBatteryOptimization() }, 1500L)
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncoming(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (!runActive) renderIdleStatus()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // Salvar tudo ao minimizar
+        saveTypingSettings()
+        saveSavedSettings()
+        StorageManager.saveHistory(this)
+        StorageManager.savePendingLinks(this)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (instance === this) instance = null
+        // Salvar estado antes de fechar
+        StorageManager.saveHistory(this)
+        StorageManager.savePendingLinks(this)
+        if (runActive) {
+            RunLog.add(this, "ℹ A tela do app foi fechada (sistema ou usuário). O vigia reabre sozinho e o processo continua de onde parou")
+        }
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        if (!runActive) ForegroundService.stop(this)
+        countdownRunnable?.let { handler.removeCallbacks(it) }
+        handler.removeCallbacksAndMessages(null)
+    }
+
+    // =====================================================================
+    // Montagem da tela
+    // =====================================================================
 
     private fun bindViews() {
         btnStart        = findViewById(R.id.btnStart)
@@ -126,6 +232,7 @@ class MainActivity : AppCompatActivity() {
         tvLinkCount     = findViewById(R.id.tvLinkCount)
         tvCountdown     = findViewById(R.id.tvCountdown)
         tvProgress      = findViewById(R.id.tvProgress)
+        tvRunStatus     = findViewById(R.id.tvRunStatus)
         tvLinkListTitle = findViewById(R.id.tvLinkListTitle)
         progressBar     = findViewById(R.id.progressBar)
         radioNormal     = findViewById(R.id.radioNormal)
@@ -136,11 +243,27 @@ class MainActivity : AppCompatActivity() {
         btnClearLinks   = findViewById(R.id.btnClearLinks)
         pageEditLinks   = findViewById(R.id.pageEditLinks)
         tabHome         = findViewById(R.id.tabHome)
+        tabMessages     = findViewById(R.id.tabMessages)
         tabHistory      = findViewById(R.id.tabHistory)
+        tabLog          = findViewById(R.id.tabLog)
         tabSettings     = findViewById(R.id.tabSettings)
         pageHome        = findViewById(R.id.pageHome)
+        pageMessages    = findViewById(R.id.pageMessages)
         pageHistory     = findViewById(R.id.pageHistory)
+        pageLog         = findViewById(R.id.pageLog)
         pageSettings    = findViewById(R.id.pageSettings)
+        editMsgLinks    = findViewById(R.id.editMsgLinks)
+        etMsgOnly       = findViewById(R.id.etMsgOnly)
+        tvMsgLinkCount  = findViewById(R.id.tvMsgLinkCount)
+        btnMsgPaste     = findViewById(R.id.btnMsgPaste)
+        btnMsgFromHistory = findViewById(R.id.btnMsgFromHistory)
+        btnMsgClear     = findViewById(R.id.btnMsgClear)
+        btnMsgStart     = findViewById(R.id.btnMsgStart)
+        tvLog           = findViewById(R.id.tvLog)
+        scrollLog       = findViewById(R.id.scrollLog)
+        btnLogRefresh   = findViewById(R.id.btnLogRefresh)
+        btnLogCopy      = findViewById(R.id.btnLogCopy)
+        btnLogClear     = findViewById(R.id.btnLogClear)
         recyclerLinks   = findViewById(R.id.recyclerLinks)
         recyclerHistory = findViewById(R.id.recyclerHistory)
         tvHistoryCount  = findViewById(R.id.tvHistoryCount)
@@ -160,6 +283,8 @@ class MainActivity : AppCompatActivity() {
         etTypingWpm = findViewById(R.id.etTypingWpm)
         etPauseMin = findViewById(R.id.etPauseMin)
         etPauseMax = findViewById(R.id.etPauseMax)
+        etCooldownHours = findViewById(R.id.etCooldownHours)
+        btnBattery = findViewById(R.id.btnBattery)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -175,8 +300,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupTabs() {
+        listOf(
+            tabHome to "🏠\nInício",
+            tabMessages to "💬\nMensagens",
+            tabHistory to "📋\nHistórico",
+            tabLog to "📜\nRegistro",
+            tabSettings to "⚙️\nConfig"
+        ).forEach { (tv, label) ->
+            tv.text = label
+            tv.textSize = 11f
+            tv.maxLines = 2
+        }
         tabHome.setOnClickListener { showTab("home") }
-        tabHistory.setOnClickListener { showTab("history"); updateHistoryCount() }
+        tabMessages.setOnClickListener { showTab("messages") }
+        tabHistory.setOnClickListener { showTab("history") }
+        tabLog.setOnClickListener { showTab("log") }
         tabSettings.setOnClickListener { showTab("settings") }
     }
 
@@ -220,28 +358,18 @@ class MainActivity : AppCompatActivity() {
         btnStart.setOnClickListener { startProcessing() }
 
         btnPause.setOnClickListener {
-            isPaused = !isPaused
-            if (isPaused) {
-                countdownRunnable?.let { handler.removeCallbacks(it) }
-                handler.removeCallbacksAndMessages(null)
-                btnPause.text = "▶ Continuar"
-                btnPause.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#4CAF50"))
-                tvCountdown.text = "⏸ Pausado"
-            } else {
-                btnPause.text = "⏸ Pausar"
-                btnPause.backgroundTintList = android.content.res.ColorStateList.valueOf(Color.parseColor("#FF9800"))
-                tvCountdown.text = ""
-                openNextLink()
-            }
+            if (!isPaused) pauseRunByUser() else resumeAfterPause()
         }
 
         btnRetry.setOnClickListener {
             if (failedLinks.isEmpty()) { Toast.makeText(this, "Nenhuma falha!", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
-            AlertDialog.Builder(this).setTitle("Retentar ${failedLinks.size} falhas?")
+            AlertDialog.Builder(this).setTitle("Retentar ${failedLinks.size} falhas (${Phase.label(lastRunPhase)})?")
                 .setPositiveButton("Sim") { _, _ ->
-                    linkList = failedLinks.map { it.second }.toMutableList()
+                    val links = failedLinks.map { it.second }.distinct().toMutableList()
                     failedLinks.clear()
-                    startProcessing(linkList)
+                    // refaz a MESMA fase em que as falhas aconteceram
+                    if (lastRunPhase == Phase.MESSAGES && lastRunMessage.isNotEmpty()) beginMessages(links, lastRunMessage)
+                    else startProcessing(links)
                 }.setNegativeButton("Cancelar", null).show()
         }
 
@@ -263,70 +391,217 @@ class MainActivity : AppCompatActivity() {
             if (checked) scheduleAutoCheck()
             else stopAutoCheck()
         }
+
+        // --- Aba Mensagens ---
+        btnMsgPaste.setOnClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val text = clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+            if (text.isNotEmpty()) {
+                val current = editMsgLinks.text.toString()
+                editMsgLinks.setText(if (current.isBlank()) text else "$current\n$text")
+                editMsgLinks.setSelection(editMsgLinks.text.length)
+                updateMsgLinkCount()
+                Toast.makeText(this, "Links colados!", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "Area de transferencia vazia", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnMsgFromHistory.setOnClickListener {
+            val doHistorico = HistoryManager.entries
+                .filter { it.status == "joined" || it.status == "already_member" || it.status == "message_sent" }
+                .map { it.link }
+                .distinct()
+            val jaTem = parseLinks(editMsgLinks.text.toString())
+            val novos = doHistorico.filter { it !in jaTem }
+            if (novos.isEmpty()) {
+                Toast.makeText(this, "Nenhum grupo novo no histórico", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val current = editMsgLinks.text.toString()
+            editMsgLinks.setText((if (current.isBlank()) "" else "$current\n") + novos.joinToString("\n"))
+            updateMsgLinkCount()
+            Toast.makeText(this, "${novos.size} grupos adicionados do histórico", Toast.LENGTH_SHORT).show()
+        }
+
+        btnMsgClear.setOnClickListener {
+            editMsgLinks.setText("")
+            updateMsgLinkCount()
+        }
+
+        btnMsgStart.setOnClickListener { startMessagesOnly() }
+
+        // --- Aba Registro ---
+        btnLogRefresh.setOnClickListener { refreshLogView() }
+        btnLogCopy.setOnClickListener {
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("registro", RunLog.lines(this, 800).joinToString("\n")))
+            Toast.makeText(this, "Registro copiado!", Toast.LENGTH_SHORT).show()
+        }
+        btnLogClear.setOnClickListener {
+            AlertDialog.Builder(this).setTitle("Limpar o registro?")
+                .setPositiveButton("Sim") { _, _ -> RunLog.clear(this); refreshLogView() }
+                .setNegativeButton("Cancelar", null).show()
+        }
+
+        btnBattery.setOnClickListener { requestIgnoreBattery() }
+    }
+
+    // =====================================================================
+    // Links
+    // =====================================================================
+
+    private fun parseLinks(text: String): List<String> {
+        val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
+        return text.trim().split("\n")
+            .map { prefixRegex.replace(it.trim(), "").trim() }
+            .filter { it.startsWith("http") }
+            .distinct()
     }
 
     private fun updateLinkCount() {
-        val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
-        val count = editTextLinks.text.toString().trim().split("\n")
-            .map { prefixRegex.replace(it.trim(), "").trim() }
-            .count { it.startsWith("http") }
-        tvLinkCount.text = "$count links"
+        tvLinkCount.text = "${parseLinks(editTextLinks.text.toString()).size} links"
     }
 
+    private fun updateMsgLinkCount() {
+        tvMsgLinkCount.text = "${parseLinks(editMsgLinks.text.toString()).size} grupos"
+    }
+
+    private fun requireAccessibility(): Boolean {
+        if (isAccessibilityEnabled()) return true
+        AlertDialog.Builder(this).setTitle("Permissao necessaria")
+            .setMessage("Ative o 'Group Joiner Service' em Configuracoes > Acessibilidade.")
+            .setPositiveButton("Configuracoes") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            .setNegativeButton("Cancelar", null).show()
+        return false
+    }
+
+    // =====================================================================
+    // Início de cada processo
+    // =====================================================================
+
     private fun startProcessing(existingList: MutableList<String>? = null) {
-        if (!isAccessibilityEnabled()) {
-            AlertDialog.Builder(this).setTitle("Permissao necessaria")
-                .setMessage("Ative o 'Group Joiner Service' em Configuracoes > Acessibilidade.")
-                .setPositiveButton("Configuracoes") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                .setNegativeButton("Cancelar", null).show()
+        if (isRunning || runActive) {
+            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
             return
         }
+        if (!requireAccessibility()) return
 
         maxGroups = etMaxGroups.text.toString().toIntOrNull() ?: 0
         selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
 
-        if (existingList == null) {
-            val prefixRegex = Regex("""^\d+\s*[-.):]?\s*""")
-            linkList = editTextLinks.text.toString().trim().split("\n")
-                .map { prefixRegex.replace(it.trim(), "").trim() }
-                .filter { it.startsWith("http") }
-                .distinct()
-                .let { if (maxGroups > 0) it.take(maxGroups) else it }
-                .toMutableList()
-        } else {
-            linkList = existingList
-        }
+        linkList = existingList ?: parseLinks(editTextLinks.text.toString())
+            .let { if (maxGroups > 0) it.take(maxGroups) else it }
+            .toMutableList()
 
         if (linkList.isEmpty()) {
             Toast.makeText(this, "Nenhum link valido! Use o botao Editar Links.", Toast.LENGTH_LONG).show()
             return
         }
 
+        resetListUi("Grupos (${linkList.size})")
+        tvLinkCount.text = "${linkList.size} links"
+        acquireScreenLock()
+        val msg = if (switchSendMessage.isChecked) etMessage.text.toString().trim() else ""
+        beginRun(Phase.JOIN, msg)
+        openNextLink()
+    }
+
+    /** Zera a lista e os controles da tela inicial para um novo processo. */
+    private fun resetListUi(title: String) {
         linkItems.clear()
         linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
         linkAdapter.notifyDataSetChanged()
-        tvLinkListTitle.text = "Grupos (${linkList.size})"
-        tvLinkCount.text = "${linkList.size} links"
-
+        tvLinkListTitle.text = title
         currentIndex = 0
         processed = false
         isPaused = false
-        isRunning = true
         failedLinks.clear()
         btnStart.isEnabled = false
         btnPause.visibility = View.VISIBLE
-        // Manter tela acesa durante o processo
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        wakeLock?.release()
-        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
-        wakeLock?.acquire(60 * 60 * 1000L) // máximo 1 hora
         btnRetry.visibility = View.GONE
-        btnPause.text = "⏸ Pausar"
+        clearPauseUi()
         progressBar.max = linkList.size
         progressBar.progress = 0
         tvProgress.text = "0/${linkList.size}"
         tvCountdown.text = ""
-        openNextLink()
+    }
+
+    /** Marca o início de uma fase: liga o serviço que mantém tudo vivo e salva o primeiro retrato. */
+    private fun beginRun(newPhase: String, message: String) {
+        phase = newPhase
+        lastRunPhase = newPhase
+        runMessage = message
+        runActive = true
+        isRunning = true
+        isPaused = false
+        runStartedAt = System.currentTimeMillis()
+        attempt = 1
+        envFailures = 0
+        screenWaits = 0
+        pauseReason = ""
+        stage = "WAIT"
+        RunRuntime.groupDone = true
+        ForegroundService.start(this)
+        ForegroundService.clearAlert(this)
+        applyServiceMode()
+        RunLog.add(this, "▶ Iniciado: ${Phase.label(phase)} (${linkList.size} grupos)")
+        persistRun("WAIT", 60_000L)
+    }
+
+    /** Garante que o serviço de acessibilidade está no modo da fase atual (ele perde o modo se reiniciar). */
+    private fun applyServiceMode() {
+        val svc = GroupJoinerService.serviceInstance ?: return
+        when (phase) {
+            Phase.MESSAGES -> {
+                svc.setCheckApproval(false)
+                svc.setMessageMode(runMessage, switchHumanTyping.isChecked, readTypingWpm())
+            }
+            Phase.APPROVAL -> {
+                svc.clearMessageMode()
+                svc.setCheckApproval(true)
+            }
+            else -> {
+                svc.clearMessageMode()
+                svc.setCheckApproval(false)
+            }
+        }
+    }
+
+    private fun acquireScreenLock() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            wakeLock?.let { if (it.isHeld) it.release() }
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK or PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
+            wl.acquire(60 * 60 * 1000L) // máximo 1 hora, renovado a cada grupo
+            wakeLock = wl
+        } catch (e: Exception) { }
+    }
+
+    // Processos longos (a fase de mensagens digitando demora mais): renova a trava de tela a cada grupo
+    private fun refreshWakeLock() {
+        if (wakeLock == null) return
+        try {
+            wakeLock?.let { if (it.isHeld) it.release() }
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "OnGroups:WakeLock")
+            wl.acquire(60 * 60 * 1000L)
+            wakeLock = wl
+        } catch (e: Exception) { }
+    }
+
+    // =====================================================================
+    // Condução dos grupos
+    // =====================================================================
+
+    /** Tempo máximo que um grupo pode levar antes de o vigia considerar que travou. */
+    private fun groupBudgetMs(): Long {
+        return if (phase == Phase.MESSAGES && switchHumanTyping.isChecked) {
+            val palavras = HumanTyping.splitWords(runMessage).size
+            90_000L + palavras * 6_000L
+        } else 50_000L
     }
 
     fun openNextLink() {
@@ -334,49 +609,35 @@ class MainActivity : AppCompatActivity() {
         processed = false
 
         if (currentIndex >= linkList.size) {
-            val joined = linkItems.count { it.status == "joined" }
-            val msgSent = linkItems.count { it.status == "message_sent" }
-            val requested = linkItems.count { it.status == "requested" }
-            val pendingC = linkItems.count { it.status == "pending" }
-            val failed = linkItems.count { it.status == "invalid" }
-            runOnUiThread {
-                tvCountdown.text = if (msgSent > 0) "💬 ${msgSent} mensagens enviadas!" else "✅ Concluido!"
-                tvProgress.text = "${linkList.size}/${linkList.size}"
-                progressBar.progress = linkList.size
-                btnStart.isEnabled = true
-                btnPause.visibility = View.GONE
-                if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
-                isRunning = false
-                // Verifica se deve iniciar Fase 2 ANTES de liberar wakelock
-                val shouldStartPhase2 = switchSendMessage.isChecked && !isPhase2 && joined > 0
-                val msg = etMessage.text.toString().trim()
-
-                if (shouldStartPhase2 && msg.isNotEmpty()) {
-                    // Mantém WakeLock e ForegroundService ativos para Fase 2
-                    tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
-                    handler.postDelayed({
-                        startPhase2(msg)
-                    }, 3000L)
-                    return@runOnUiThread
-                }
-
-                // Só libera tudo se nao tem Fase 2
-                wakeLock?.release()
-                wakeLock = null
-                isPhase2 = false
-                isCheckingApproval = false
-                isLeavingGroup = false
-                GroupJoinerService.serviceInstance?.clearMessageMode()
-                GroupJoinerService.serviceInstance?.setCheckApproval(false)
-                GroupJoinerService.serviceInstance?.setLeaveMode(false)
-                ForegroundService.stop(this)
-                StorageManager.clearResumeState(this)
-                if (switchNotifications.isChecked) sendFinishedNotification(joined, requested + pendingC, failed)
-            }
+            finishOrChain()
             return
         }
 
+        // sem o serviço de acessibilidade não há o que fazer
+        if (GroupJoinerService.serviceInstance == null) {
+            pauseRun("${ForegroundService.PAUSE_SERVICE}: ative 'Group Joiner Service' em Configurações > Acessibilidade")
+            return
+        }
+
+        // tela apagada ou bloqueada: não abre o WhatsApp agora
+        if (!screenReadyOrWait()) return
+
         val link = linkList[currentIndex]
+
+        // mensagens: não repete no mesmo grupo dentro do prazo (protege também contra envio em dobro depois de uma retomada)
+        if (isPhase2 && skipIfSentRecently(link)) return
+
+        applyServiceMode()
+        RunRuntime.currentLink = link
+        RunRuntime.groupSeq = System.currentTimeMillis()
+        RunRuntime.groupDone = false
+        persistRun("GROUP", groupBudgetMs())
+        RunLog.add(
+            this,
+            "▶ ${Phase.label(phase)} ${currentIndex + 1}/${linkList.size}" +
+                (if (attempt > 1) " (tentativa $attempt/$MAX_ATTEMPTS)" else "")
+        )
+
         runOnUiThread {
             if (currentIndex < linkItems.size) {
                 linkItems[currentIndex].status = "current"
@@ -400,19 +661,146 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(intent)
         } catch (e: Exception) {
-            updateLinkStatus(currentIndex, "invalid")
-            failedLinks.add(Pair(currentIndex, link))
+            RunLog.add(this, "⚠ Não consegui abrir o WhatsApp: ${e.message}")
             GroupJoinerService.serviceInstance?.setWaiting(false)
-            scheduleNext()
+            RunRuntime.groupDone = true
+            handleEnvRetry("o WhatsApp não abriu")
         }
     }
 
-    fun onGroupProcessed(status: String) {
-        if (processed) return
+    /** Devolve true se a tela está pronta. Se não estiver, tenta acender/liberar, avisa e tenta de novo em 5 s. */
+    private fun screenReadyOrWait(): Boolean {
+        val travadaSemSaida = screenWaits >= 4 && !ScreenGuard.isSecure(this)
+        if (ScreenGuard.isReady(this) || travadaSemSaida) {
+            if (pauseReason.startsWith(ForegroundService.PAUSE_SCREEN)) {
+                pauseReason = ""
+                ForegroundService.clearAlert(this)
+                RunLog.add(this, "🔓 Tela liberada: continuando")
+            }
+            screenWaits = 0
+            return true
+        }
+        screenWaits++
+        val motivo = ScreenGuard.describe(this)
+        if (!ScreenGuard.isScreenOn(this)) ScreenGuard.wake(this)
+        if (screenWaits == 1) RunLog.add(this, "🔆 $motivo: tentando acender a tela")
+        if (ScreenGuard.isLocked(this) && ScreenGuard.isSecure(this) && screenWaits >= 3 && pauseReason.isEmpty()) {
+            pauseReason = "${ForegroundService.PAUSE_SCREEN}: desbloqueie o celular para continuar"
+            RunLog.add(this, "🔒 $pauseReason")
+            ForegroundService.alert(
+                this, "On Groups aguardando",
+                "${Phase.label(phase)} ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}: $pauseReason"
+            )
+        }
+        persistRun("WAIT", 120_000L)
+        runOnUiThread { tvCountdown.text = "🔒 $motivo — aguardando" }
+        screenWaitRunnable?.let { handler.removeCallbacks(it) }
+        val r = Runnable {
+            screenWaitRunnable = null
+            if (isRunning && !isPaused) openNextLink()
+        }
+        screenWaitRunnable = r
+        handler.postDelayed(r, 5_000L)
+        return false
+    }
+
+    private fun readCooldownHours(): Int =
+        (etCooldownHours.text.toString().trim().toIntOrNull() ?: 3).coerceIn(0, 720)
+
+    /** Mensagens: pula o grupo se a mensagem já foi enviada há pouco tempo. Devolve true se pulou. */
+    private fun skipIfSentRecently(link: String): Boolean {
+        val horas = readCooldownHours()
+        if (horas <= 0) return false
+        val ultimo = StorageManager.lastSent(this, link)
+        if (ultimo <= 0L) return false
+        val idade = System.currentTimeMillis() - ultimo
+        if (idade >= horas * 3_600_000L) return false
+        val min = idade / 60_000L
+        val faz = if (min >= 60) "${min / 60} h ${min % 60} min" else "$min min"
+        RunLog.add(this, "⏭ Mensagens ${currentIndex + 1}/${linkList.size}: pulado (já enviou há $faz; ajuste em Config)")
+        RunRuntime.groupSeq = System.currentTimeMillis()
+        RunRuntime.groupDone = true
+        updateLinkStatus(currentIndex, "skipped_recent")
+        addToHistory(link, "skipped_recent")
+        scheduleNext(skipped = true)
+        return true
+    }
+
+    private fun finishOrChain() {
+        val joined = linkItems.count { it.status == "joined" }
+        val msgSent = linkItems.count { it.status == "message_sent" }
+        val requested = linkItems.count { it.status == "requested" }
+        val pendingC = linkItems.count { it.status == "pending" }
+        val failed = linkItems.count { it.status == "invalid" || it.status == "error_env" || it.status == "admin_only" }
+        runOnUiThread {
+            tvCountdown.text = if (msgSent > 0) "💬 ${msgSent} mensagens enviadas!" else "✅ Concluido!"
+            tvProgress.text = "${linkList.size}/${linkList.size}"
+            progressBar.progress = linkList.size
+            btnStart.isEnabled = true
+            btnPause.visibility = View.GONE
+            if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
+
+            // Depois de ENTRAR (ou de verificar aprovados), manda a mensagem nos grupos em que entrou
+            val shouldStartPhase2 = phase != Phase.MESSAGES && switchSendMessage.isChecked && !isPhase2 && joined > 0
+            val msg = etMessage.text.toString().trim()
+
+            if (shouldStartPhase2 && msg.isNotEmpty()) {
+                // Mantém tudo ativo para a fase de mensagens
+                tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
+                RunLog.add(this, "✔ ${Phase.label(phase)} concluída: $joined entraram. Iniciando MENSAGENS em 3 s")
+                isRunning = true
+                persistRun("WAIT", 60_000L)
+                chainRunnable?.let { handler.removeCallbacks(it) }
+                val r = Runnable { chainRunnable = null; startPhase2(msg) }
+                chainRunnable = r
+                handler.postDelayed(r, 3000L)
+                return@runOnUiThread
+            }
+
+            // Só libera tudo se não tem fase de mensagens
+            finishRun(joined, requested + pendingC, failed, msgSent)
+        }
+    }
+
+    private fun finishRun(joined: Int, waiting: Int, failed: Int, msgSent: Int) {
+        val fase = phase
+        runActive = false
+        isRunning = false
+        isPaused = false
+        pauseReason = ""
+        StorageManager.clearRun(this)
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        isPhase2 = false
+        isCheckingApproval = false
+        isLeavingGroup = false
+        GroupJoinerService.serviceInstance?.clearMessageMode()
+        GroupJoinerService.serviceInstance?.setCheckApproval(false)
+        GroupJoinerService.serviceInstance?.setLeaveMode(false)
+        ForegroundService.stop(this)
+        ForegroundService.clearAlert(this)
+        clearScreenFlags()
+        RunLog.add(this, "✔ Concluído (${Phase.label(fase)}): ✅$joined entraram, 💬$msgSent mensagens, ⏳$waiting aguardando, ❌$failed falhas")
+        renderIdleStatus()
+        if (switchNotifications.isChecked) {
+            if (fase == Phase.MESSAGES) sendFinishedNotification("💬 $msgSent mensagens enviadas  ❌ $failed falharam")
+            else sendFinishedNotification("✅ $joined entrou  ⏳ $waiting aguardando  ❌ $failed falhou")
+        }
+    }
+
+    /** Resultado de um grupo. [seq] identifica o grupo: resultados velhos ou repetidos são ignorados. */
+    fun onGroupProcessed(status: String, seq: Long) {
+        if (seq != RunRuntime.groupSeq || RunRuntime.groupDone) return
+        RunRuntime.groupDone = true
         processed = true
-        // Salvar estado atual para retomada
-        StorageManager.saveResumeState(this, linkList, currentIndex + 1,
-            MainActivity.selectedPackage, etMessage.text.toString().trim())
+
+        // Problema do ambiente (tela apagada, WhatsApp não respondeu): tenta o MESMO grupo de novo
+        if (status == "retry_env") {
+            handleEnvRetry("WhatsApp/tela não respondeu")
+            return
+        }
+        attempt = 1
+        envFailures = 0
 
         val link = if (currentIndex < linkList.size) linkList[currentIndex] else ""
 
@@ -436,7 +824,7 @@ class MainActivity : AppCompatActivity() {
                 addToHistory(link, status)
             }
             "admin_only" -> {
-                // Admin sem envio — adiciona nos falhos para retentar (vai sair do grupo)
+                // Admin sem envio — adiciona nos falhos para retentar
                 failedLinks.add(Pair(currentIndex, link))
                 updateLinkStatus(currentIndex, "admin_only")
                 addToHistory(link, "admin_only")
@@ -451,192 +839,54 @@ class MainActivity : AppCompatActivity() {
                 addToHistory(link, status)
             }
         }
+        RunLog.add(
+            this,
+            "${StatusInfo.icon(status)} ${Phase.label(phase)} ${currentIndex + 1}/${linkList.size}: ${StatusInfo.text(status)}"
+        )
         scheduleNext()
     }
 
-    private fun checkResumeState() {
-        val state = StorageManager.loadResumeState(this) ?: return
-        val remaining = state.links.size - state.index
-        if (remaining <= 0) { StorageManager.clearResumeState(this); return }
-
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Continuar de onde parou?")
-            .setMessage("Havia um processo em andamento com $remaining grupos restantes. Deseja continuar?")
-            .setPositiveButton("Continuar") { _, _ ->
-                // Restaurar estado
-                MainActivity.selectedPackage = state.pkg
-                if (state.pkg == "com.whatsapp.w4b") radioBusiness.isChecked = true
-                else radioNormal.isChecked = true
-                if (state.message.isNotEmpty()) {
-                    etMessage.setText(state.message)
-                    switchSendMessage.isChecked = true
-                }
-                val remainingLinks = state.links.subList(state.index, state.links.size).toMutableList()
-                startProcessing(remainingLinks)
-            }
-            .setNegativeButton("Nao") { _, _ ->
-                StorageManager.clearResumeState(this)
-            }
-            .show()
-    }
-
-    private fun scheduleAutoCheck() {
-        stopAutoCheck()
-        val intervalMin = etCheckInterval.text.toString().toLongOrNull() ?: 30
-        autoCheckIntervalMs = intervalMin * 60 * 1000L
-        approvalCheckRunnable = object : Runnable {
-            override fun run() {
-                if (HistoryManager.pendingLinks.isNotEmpty() && !isRunning) {
-                    startApprovalCheck()
-                }
-                handler.postDelayed(this, autoCheckIntervalMs)
-            }
-        }
-        handler.postDelayed(approvalCheckRunnable!!, autoCheckIntervalMs)
-        Toast.makeText(this, "Verificacao automatica ativa a cada ${intervalMin}min", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun stopAutoCheck() {
-        approvalCheckRunnable?.let { handler.removeCallbacks(it) }
-        approvalCheckRunnable = null
-    }
-
-    private fun startApprovalCheck() {
-        val pending = HistoryManager.pendingLinks.toMutableList()
-        if (pending.isEmpty()) {
-            Toast.makeText(this, "Nenhum pedido pendente!", Toast.LENGTH_SHORT).show()
+    /** Falha por causa do ambiente: tenta o mesmo grupo de novo (até MAX_ATTEMPTS); depois marca e segue. */
+    private fun handleEnvRetry(motivo: String) {
+        val n = currentIndex + 1
+        val link = linkList.getOrNull(currentIndex) ?: ""
+        GroupJoinerService.serviceInstance?.abortCurrent()
+        if (attempt < MAX_ATTEMPTS) {
+            attempt++
+            RunLog.add(
+                this,
+                "↻ ${Phase.label(phase)} $n/${linkList.size}: $motivo (${ScreenGuard.describe(this)}). Tentativa $attempt/$MAX_ATTEMPTS em 8 s"
+            )
+            persistRun("WAIT", 8_000L + 60_000L)
+            runOnUiThread { tvCountdown.text = "↻ Tentando de novo ($attempt/$MAX_ATTEMPTS)" }
+            startCountdown(8_000L, currentIndex) { openNextLink() }
             return
         }
-        if (isRunning) {
-            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+        // desistiu deste grupo
+        RunLog.add(this, "⚠ ${Phase.label(phase)} $n/${linkList.size}: falhou $MAX_ATTEMPTS vezes ($motivo). Marquei como falha e sigo")
+        failedLinks.add(Pair(currentIndex, link))
+        updateLinkStatus(currentIndex, "error_env")
+        addToHistory(link, "error_env")
+        attempt = 1
+        envFailures++
+        if (envFailures >= 3) {
+            currentIndex++
+            pauseRun("O WhatsApp/tela não respondeu em 3 grupos seguidos (${ScreenGuard.describe(this)})")
             return
         }
+        scheduleNext()
+    }
 
-        isCheckingApproval = true
-        GroupJoinerService.serviceInstance?.setCheckApproval(true)
-
-        linkList = pending
-        linkItems.clear()
-        linkList.forEachIndexed { i, url ->
-            linkItems.add(LinkItem(i + 1, url, "requested")) // começa como pendente
+    private fun scheduleNext(skipped: Boolean = false) {
+        // Entrar nos grupos: ciclo fixo 5/30/40/50/60 s. Mensagens: pausa menor e aleatória (Config)
+        val delay = when {
+            skipped -> 800L
+            isPhase2 -> HumanTyping.pauseBetweenGroupsMs(readPauseMin(), readPauseMax())
+            else -> defaultIntervals[currentIndex % defaultIntervals.size]
         }
-        linkAdapter.notifyDataSetChanged()
-        tvLinkListTitle.text = "🔍 Verificando aprovacoes (${linkList.size})"
-
-        // Vai para aba Inicio para acompanhar
-        showTab("home")
-
-        currentIndex = 0
-        processed = false
-        isPaused = false
-        isRunning = true
-        failedLinks.clear()
-        btnStart.isEnabled = false
-        btnPause.visibility = View.VISIBLE
-        btnRetry.visibility = View.GONE
-        progressBar.max = linkList.size
-        progressBar.progress = 0
-        tvProgress.text = "0/${linkList.size}"
-        tvCountdown.text = ""
-        ForegroundService.start(this)
-        openNextLink()
-    }
-
-    private fun startPhase2(message: String) {
-        phase2Links = linkItems
-            .filter { it.status == "joined" }
-            .map { it.url }
-            .toMutableList()
-
-        if (phase2Links.isEmpty()) return
-
-        isPhase2 = true
-        saveTypingSettings()
-        GroupJoinerService.serviceInstance?.setMessageMode(message, switchHumanTyping.isChecked, readTypingWpm())
-
-        linkList = phase2Links
-        linkItems.clear()
-        linkList.forEachIndexed { i, url -> linkItems.add(LinkItem(i + 1, url)) }
-        linkAdapter.notifyDataSetChanged()
-        tvLinkListTitle.text = "💬 Enviando mensagens (${linkList.size})"
-
-        currentIndex = 0
-        processed = false
-        isPaused = false
-        isRunning = true
-        failedLinks.clear()
-        btnStart.isEnabled = false
-        btnPause.visibility = View.VISIBLE
-        btnRetry.visibility = View.GONE
-        progressBar.max = linkList.size
-        progressBar.progress = 0
-        tvProgress.text = "0/${linkList.size}"
-        tvCountdown.text = ""
-
-        // Renovar WakeLock para Fase 2
-        val pm = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-        if (wakeLock?.isHeld == false || wakeLock == null) {
-            wakeLock?.release()
-            wakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK or android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP, "OnGroups:WakeLock")
-            wakeLock?.acquire(60 * 60 * 1000L)
-        }
-
-        openNextLink()
-    }
-
-    // --- Fase 2: digitação humana e pausa entre grupos (aba Config) ---
-
-    private fun readTypingWpm(): Int =
-        (etTypingWpm.text.toString().trim().toIntOrNull() ?: 70).coerceIn(20, 250)
-
-    private fun readPauseMin(): Int =
-        (etPauseMin.text.toString().trim().toIntOrNull() ?: 8).coerceIn(1, 600)
-
-    private fun readPauseMax(): Int =
-        (etPauseMax.text.toString().trim().toIntOrNull() ?: 20).coerceIn(readPauseMin(), 600)
-
-    private fun loadTypingSettings() {
-        val s = StorageManager.loadTypingSettings(this)
-        switchHumanTyping.isChecked = s.human
-        etTypingWpm.setText(s.wpm.toString())
-        etPauseMin.setText(s.pauseMin.toString())
-        etPauseMax.setText(s.pauseMax.toString())
-    }
-
-    private fun saveTypingSettings() {
-        StorageManager.saveTypingSettings(
-            this, switchHumanTyping.isChecked, readTypingWpm(), readPauseMin(), readPauseMax()
-        )
-    }
-
-    // Processos longos (a fase 2 digitando demora mais): renova a trava de tela a cada grupo para não vencer em 1 h
-    private fun refreshWakeLock() {
-        if (wakeLock == null) return  // só renova quando já existe (criada no startProcessing)
-        try {
-            wakeLock?.let { if (it.isHeld) it.release() }
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            val wl = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "OnGroups:WakeLock")
-            wl.acquire(60 * 60 * 1000L)
-            wakeLock = wl
-        } catch (e: Exception) { }
-    }
-
-    private fun updateLinkStatus(index: Int, status: String) {
-        runOnUiThread {
-            if (index < linkItems.size) {
-                linkItems[index].status = status
-                linkItems[index].countdown = ""
-                linkAdapter.notifyItemChanged(index)
-            }
-        }
-    }
-
-    private fun scheduleNext() {
-        // Entrar nos grupos: ciclo fixo 5/30/40/50/60 s. Mensagens (fase 2): pausa menor e aleatória (Config)
-        val delay = if (isPhase2) HumanTyping.pauseBetweenGroupsMs(readPauseMin(), readPauseMax())
-                    else defaultIntervals[currentIndex % defaultIntervals.size]
         val nextIdx = currentIndex + 1
         currentIndex++
+        persistRun("WAIT", delay + 60_000L)
         runOnUiThread {
             progressBar.progress = currentIndex
             tvProgress.text = "$currentIndex/${linkList.size}"
@@ -671,6 +921,442 @@ class MainActivity : AppCompatActivity() {
         tick()
     }
 
+    // =====================================================================
+    // Estado salvo, pausa, parada, retomada
+    // =====================================================================
+
+    private fun timeNow(): String = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
+
+    private fun renderIdleStatus() {
+        tvRunStatus.text = "Última atividade: " + RunLog.last(this)
+        tvRunStatus.setTextColor(Color.parseColor("#455A64"))
+    }
+
+    /** Salva o retrato do processo (fase, grupo, resultados) e atualiza a linha de status e a notificação. */
+    private fun persistRun(newStage: String, expectedInMs: Long) {
+        stage = newStage
+        val now = System.currentTimeMillis()
+        val snap = RunSnapshot(
+            active = runActive,
+            phase = phase,
+            links = linkList.toList(),
+            statuses = linkItems.map { if (it.status == "current") "" else it.status },
+            index = currentIndex,
+            stage = stage,
+            groupSeq = RunRuntime.groupSeq,
+            attempt = attempt,
+            message = runMessage,
+            pkg = selectedPackage,
+            progressAt = now,
+            expectedBy = now + expectedInMs,
+            pauseReason = pauseReason,
+            startedAt = runStartedAt
+        )
+        StorageManager.saveRun(this, snap)
+        val linha = snap.summaryLine()
+        ForegroundService.updateStatus(this, linha + " · " + timeNow())
+        tvRunStatus.text = linha + "  ·  " + timeNow()
+        tvRunStatus.setTextColor(Color.parseColor(if (pauseReason.isNotEmpty()) "#B71C1C" else "#455A64"))
+    }
+
+    private fun showPausedUi(text: String) {
+        btnPause.text = "▶ Continuar"
+        btnPause.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#4CAF50"))
+        tvCountdown.text = text
+    }
+
+    private fun clearPauseUi() {
+        btnPause.text = "⏸ Pausar"
+        btnPause.backgroundTintList = ColorStateList.valueOf(Color.parseColor("#FF9800"))
+        tvCountdown.text = ""
+    }
+
+    private fun cancelRunTimers() {
+        countdownRunnable?.let { handler.removeCallbacks(it) }
+        screenWaitRunnable?.let { handler.removeCallbacks(it) }
+        chainRunnable?.let { handler.removeCallbacks(it) }
+    }
+
+    private fun pauseRunByUser() {
+        isPaused = true
+        pauseReason = "Pausado por você"
+        cancelRunTimers()
+        persistRun(stage, 24L * 3_600_000L)
+        RunLog.add(this, "⏸ Pausado por você")
+        showPausedUi("⏸ Pausado")
+    }
+
+    /** Pausa automática (ex.: serviço de acessibilidade desligado, 3 falhas seguidas). O vigia avisa e, se possível, retoma sozinho. */
+    private fun pauseRun(reason: String) {
+        isPaused = true
+        pauseReason = reason
+        cancelRunTimers()
+        persistRun("WAIT", 24L * 3_600_000L)
+        RunLog.add(this, "⏸ Pausado: $reason")
+        ForegroundService.alert(
+            this, "On Groups pausado",
+            "${Phase.label(phase)} ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}: $reason"
+        )
+        runOnUiThread { showPausedUi("⏸ $reason") }
+    }
+
+    private fun resumeAfterPause() {
+        isPaused = false
+        pauseReason = ""
+        screenWaits = 0
+        envFailures = 0
+        ForegroundService.clearAlert(this)
+        clearPauseUi()
+        RunLog.add(this, "▶ Retomado")
+        if (stage == "GROUP" && !RunRuntime.groupDone) {
+            // o grupo em andamento ainda vai responder
+            persistRun("GROUP", groupBudgetMs())
+        } else {
+            openNextLink()
+        }
+    }
+
+    private fun stopRun(reason: String) {
+        cancelRunTimers()
+        GroupJoinerService.serviceInstance?.abortCurrent()
+        runActive = false
+        isRunning = false
+        isPaused = false
+        pauseReason = ""
+        RunRuntime.groupDone = true
+        StorageManager.clearRun(this)
+        RunLog.add(this, "⏹ $reason")
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+        isPhase2 = false
+        isCheckingApproval = false
+        isLeavingGroup = false
+        GroupJoinerService.serviceInstance?.clearMessageMode()
+        GroupJoinerService.serviceInstance?.setCheckApproval(false)
+        ForegroundService.stop(this)
+        ForegroundService.clearAlert(this)
+        clearScreenFlags()
+        btnStart.isEnabled = true
+        btnPause.visibility = View.GONE
+        clearPauseUi()
+        tvCountdown.text = "⏹ Parado"
+        renderIdleStatus()
+    }
+
+    /** Chamado pelo botão "Parar" da notificação. */
+    fun stopRunFromOutside() {
+        runOnUiThread { stopRun("Parado pelo botão da notificação") }
+    }
+
+    /**
+     * Entrada de tudo que chega de fora: resultado de um grupo (vindo do serviço de acessibilidade),
+     * pedido de recuperação do vigia, ou simples abertura do app. Se havia um processo em andamento e esta
+     * tela é nova, reconstrói o estado a partir do retrato salvo e continua na FASE certa.
+     */
+    private fun handleIncoming(inc: Intent?) {
+        val status = inc?.getStringExtra(EXTRA_STATUS)
+        val seq = inc?.getLongExtra(EXTRA_SEQ, 0L) ?: 0L
+        val recover = inc?.getBooleanExtra(EXTRA_RECOVER, false) ?: false
+        inc?.removeExtra(EXTRA_STATUS)
+        inc?.removeExtra(EXTRA_SEQ)
+        inc?.removeExtra(EXTRA_RECOVER)
+        if (status != null || recover) showOverLockScreen()
+
+        // Esta tela já está conduzindo o processo
+        if (isRunning || runActive) {
+            if (status != null) {
+                onGroupProcessed(status, seq)
+                return
+            }
+            if (recover) {
+                when {
+                    isPaused && pauseReason.startsWith(ForegroundService.PAUSE_SERVICE) -> {
+                        RunLog.add(this, "🔓 Serviço de acessibilidade de volta: retomando")
+                        resumeAfterPause()
+                    }
+                    pauseReason.startsWith(ForegroundService.PAUSE_SCREEN) -> {
+                        pauseReason = ""
+                        screenWaitRunnable?.let { handler.removeCallbacks(it) }
+                        ForegroundService.clearAlert(this)
+                        openNextLink()
+                    }
+                    else -> {
+                        val s = StorageManager.loadRun(this)
+                        if (s == null || System.currentTimeMillis() >= s.expectedBy) recoverStalled("vigia")
+                    }
+                }
+            }
+            return
+        }
+
+        // Tela nova: havia processo em andamento?
+        val snap = StorageManager.loadRun(this) ?: return
+        if (!snap.active) return
+        restoreRun(snap)
+        val velho = System.currentTimeMillis() - snap.progressAt > STALE_MS
+        when {
+            status != null && snap.stage == "GROUP" && seq == snap.groupSeq -> {
+                RunRuntime.groupSeq = snap.groupSeq
+                RunRuntime.groupDone = false
+                RunLog.add(this, "↻ App reaberto: recebi o resultado do grupo ($status) e sigo")
+                onGroupProcessed(status, seq)
+            }
+            snap.pauseReason.isNotEmpty() && !recover -> {
+                isPaused = true
+                pauseReason = snap.pauseReason
+                showPausedUi("⏸ ${snap.pauseReason}")
+                RunLog.add(this, "ℹ Processo estava pausado: ${snap.pauseReason}")
+            }
+            velho && !recover -> askResume(snap)
+            else -> recoverStalled(if (recover) "vigia" else "retomada automática")
+        }
+    }
+
+    /** Reconstrói na memória o processo salvo (fase, lista, resultados, posição). */
+    private fun restoreRun(snap: RunSnapshot) {
+        phase = snap.phase
+        lastRunPhase = snap.phase
+        linkList = snap.links.toMutableList()
+        linkItems.clear()
+        snap.links.forEachIndexed { i, url ->
+            val st = snap.statuses.getOrNull(i) ?: ""
+            linkItems.add(LinkItem(i + 1, url, if (st.isEmpty()) "pending" else st))
+        }
+        linkAdapter.notifyDataSetChanged()
+        currentIndex = snap.index.coerceIn(0, linkList.size)
+        attempt = snap.attempt
+        stage = snap.stage
+        runMessage = snap.message
+        lastRunMessage = snap.message
+        runStartedAt = snap.startedAt
+        selectedPackage = snap.pkg
+        if (snap.pkg == "com.whatsapp.w4b") radioBusiness.isChecked = true else radioNormal.isChecked = true
+        if (snap.phase == Phase.JOIN && snap.message.isNotEmpty()) {
+            etMessage.setText(snap.message)
+            switchSendMessage.isChecked = true
+        }
+        runActive = true
+        isRunning = true
+        isPaused = false
+        pauseReason = ""
+        isPhase2 = snap.phase == Phase.MESSAGES
+        isCheckingApproval = snap.phase == Phase.APPROVAL
+        failedLinks.clear()
+        snap.statuses.forEachIndexed { i, s ->
+            if (s == "invalid" || s == "error_env" || s == "admin_only") failedLinks.add(Pair(i, snap.links[i]))
+        }
+        RunRuntime.currentLink = linkList.getOrNull(currentIndex)
+        applyServiceMode()
+        tvLinkListTitle.text = when (snap.phase) {
+            Phase.MESSAGES -> "💬 Enviando mensagens (${linkList.size})"
+            Phase.APPROVAL -> "🔍 Verificando aprovacoes (${linkList.size})"
+            else -> "Grupos (${linkList.size})"
+        }
+        progressBar.max = linkList.size
+        progressBar.progress = currentIndex
+        tvProgress.text = "${minOf(currentIndex + 1, linkList.size)}/${linkList.size}"
+        btnStart.isEnabled = false
+        btnPause.visibility = View.VISIBLE
+        btnRetry.visibility = View.GONE
+        clearPauseUi()
+        acquireScreenLock()
+        ForegroundService.start(this)
+        RunLog.add(this, "↻ Estado restaurado: ${Phase.label(snap.phase)}, grupo ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}, etapa ${snap.stage}")
+    }
+
+    /** Continua de onde parou: o grupo que estava em andamento conta como tentativa perdida. */
+    private fun recoverStalled(reason: String) {
+        if (!runActive) return
+        cancelRunTimers()
+        GroupJoinerService.serviceInstance?.abortCurrent()
+        RunLog.add(
+            this,
+            "⚠ Recuperando ($reason): ${Phase.label(phase)} ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}, etapa $stage"
+        )
+        if (isPaused) {
+            isPaused = false
+            pauseReason = ""
+            clearPauseUi()
+        }
+        if (stage == "GROUP") {
+            RunRuntime.groupDone = true
+            handleEnvRetry("sem resposta ($reason)")
+        } else {
+            openNextLink()
+        }
+    }
+
+    private fun askResume(snap: RunSnapshot) {
+        val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(snap.progressAt))
+        AlertDialog.Builder(this)
+            .setTitle("Continuar de onde parou?")
+            .setMessage(
+                "O app parou na fase ${Phase.label(snap.phase)}, no grupo ${minOf(snap.index + 1, snap.links.size)} de ${snap.links.size}, " +
+                    "às $hora. Deseja continuar?"
+            )
+            .setPositiveButton("Continuar") { _, _ -> recoverStalled("confirmado por você") }
+            .setNegativeButton("Descartar") { _, _ -> stopRun("Processo anterior descartado por você") }
+            .setCancelable(false)
+            .show()
+    }
+
+    // =====================================================================
+    // Verificação de aprovados
+    // =====================================================================
+
+    private fun scheduleAutoCheck() {
+        stopAutoCheck()
+        val intervalMin = etCheckInterval.text.toString().toLongOrNull() ?: 30
+        autoCheckIntervalMs = intervalMin * 60 * 1000L
+        approvalCheckRunnable = object : Runnable {
+            override fun run() {
+                if (HistoryManager.pendingLinks.isNotEmpty() && !isRunning) {
+                    startApprovalCheck()
+                }
+                handler.postDelayed(this, autoCheckIntervalMs)
+            }
+        }
+        handler.postDelayed(approvalCheckRunnable!!, autoCheckIntervalMs)
+        Toast.makeText(this, "Verificacao automatica ativa a cada ${intervalMin}min", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopAutoCheck() {
+        approvalCheckRunnable?.let { handler.removeCallbacks(it) }
+        approvalCheckRunnable = null
+    }
+
+    private fun startApprovalCheck() {
+        val pending = HistoryManager.pendingLinks.toMutableList()
+        if (pending.isEmpty()) {
+            Toast.makeText(this, "Nenhum pedido pendente!", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (isRunning || runActive) {
+            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        isCheckingApproval = true
+        linkList = pending
+        resetListUi("🔍 Verificando aprovacoes (${linkList.size})")
+        linkItems.forEach { it.status = "requested" } // começa como pendente
+        linkAdapter.notifyDataSetChanged()
+
+        // Vai para aba Inicio para acompanhar
+        showTab("home")
+        acquireScreenLock()
+        beginRun(Phase.APPROVAL, "")
+        openNextLink()
+    }
+
+    // =====================================================================
+    // Fase de mensagens
+    // =====================================================================
+
+    /** Depois de entrar nos grupos: manda a mensagem só nos grupos em que entrou. */
+    private fun startPhase2(message: String) {
+        val links = linkItems.filter { it.status == "joined" }.map { it.url }
+        if (links.isEmpty()) {
+            finishRun(0, 0, 0, 0)
+            return
+        }
+        beginMessages(links, message)
+    }
+
+    /** Aba Mensagens: manda a mensagem nos grupos da lista, sem entrar em nenhum. */
+    private fun startMessagesOnly() {
+        if (isRunning || runActive) {
+            Toast.makeText(this, "Aguarde o processo atual terminar.", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!requireAccessibility()) return
+        val links = parseLinks(editMsgLinks.text.toString())
+        val msg = etMsgOnly.text.toString().trim()
+        if (links.isEmpty()) {
+            Toast.makeText(this, "Cole os links dos grupos primeiro.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (msg.isEmpty()) {
+            Toast.makeText(this, "Escreva a mensagem primeiro.", Toast.LENGTH_LONG).show()
+            return
+        }
+        selectedPackage = if (radioBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
+        saveSavedSettings()
+        showTab("home")
+        beginMessages(links, msg)
+    }
+
+    private fun beginMessages(links: List<String>, message: String) {
+        phase2Links = links.toMutableList()
+        isPhase2 = true
+        lastRunMessage = message
+        saveTypingSettings()
+        linkList = phase2Links
+        resetListUi("💬 Enviando mensagens (${linkList.size})")
+        acquireScreenLock()
+        beginRun(Phase.MESSAGES, message)
+        openNextLink()
+    }
+
+    // =====================================================================
+    // Ajustes (aba Config)
+    // =====================================================================
+
+    private fun readTypingWpm(): Int =
+        (etTypingWpm.text.toString().trim().toIntOrNull() ?: 70).coerceIn(20, 250)
+
+    private fun readPauseMin(): Int =
+        (etPauseMin.text.toString().trim().toIntOrNull() ?: 8).coerceIn(1, 600)
+
+    private fun readPauseMax(): Int =
+        (etPauseMax.text.toString().trim().toIntOrNull() ?: 20).coerceIn(readPauseMin(), 600)
+
+    private fun loadTypingSettings() {
+        val s = StorageManager.loadTypingSettings(this)
+        switchHumanTyping.isChecked = s.human
+        etTypingWpm.setText(s.wpm.toString())
+        etPauseMin.setText(s.pauseMin.toString())
+        etPauseMax.setText(s.pauseMax.toString())
+    }
+
+    private fun saveTypingSettings() {
+        StorageManager.saveTypingSettings(
+            this, switchHumanTyping.isChecked, readTypingWpm(), readPauseMin(), readPauseMax()
+        )
+    }
+
+    /** Mensagem da Config, prazo entre envios e a aba Mensagens: agora ficam salvos mesmo se o app reiniciar. */
+    private fun loadSavedSettings() {
+        etMessage.setText(StorageManager.getPref(this, "cfg_message"))
+        switchSendMessage.isChecked = StorageManager.getPref(this, "cfg_send_after_join") == "1"
+        etCooldownHours.setText(StorageManager.getPref(this, "cfg_cooldown", "3"))
+        editMsgLinks.setText(StorageManager.getPref(this, "msg_links"))
+        etMsgOnly.setText(StorageManager.getPref(this, "msg_text"))
+        updateMsgLinkCount()
+    }
+
+    private fun saveSavedSettings() {
+        StorageManager.setPref(this, "cfg_message", etMessage.text.toString())
+        StorageManager.setPref(this, "cfg_send_after_join", if (switchSendMessage.isChecked) "1" else "0")
+        StorageManager.setPref(this, "cfg_cooldown", readCooldownHours().toString())
+        StorageManager.setPref(this, "msg_links", editMsgLinks.text.toString())
+        StorageManager.setPref(this, "msg_text", etMsgOnly.text.toString())
+    }
+
+    // =====================================================================
+    // Lista, histórico e abas
+    // =====================================================================
+
+    private fun updateLinkStatus(index: Int, status: String) {
+        runOnUiThread {
+            if (index < linkItems.size) {
+                linkItems[index].status = status
+                linkItems[index].countdown = ""
+                linkAdapter.notifyItemChanged(index)
+            }
+        }
+    }
+
     private fun addToHistory(link: String, status: String) {
         val entry = HistoryEntry(number = currentIndex, link = link, status = status)
         HistoryManager.add(entry)
@@ -685,23 +1371,43 @@ class MainActivity : AppCompatActivity() {
         val joined = HistoryManager.entries.count { it.status == "joined" }
         val requested = HistoryManager.entries.count { it.status == "requested" }
         val pending = HistoryManager.entries.count { it.status == "pending" }
-        val invalid = HistoryManager.entries.count { it.status == "invalid" }
-        tvHistoryCount.text = "$total  ✅$joined  ⏳$requested  🔒$pending  ❌$invalid"
+        val msgs = HistoryManager.entries.count { it.status == "message_sent" }
+        val invalid = HistoryManager.entries.count { it.status == "invalid" || it.status == "error_env" }
+        tvHistoryCount.text = "$total  ✅$joined  💬$msgs  ⏳$requested  🔒$pending  ❌$invalid"
+    }
+
+    private fun refreshLogView() {
+        val lines = RunLog.lines(this, 300)
+        tvLog.text = if (lines.isEmpty()) "Nada registrado ainda." else lines.joinToString("\n")
+        scrollLog.post { scrollLog.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun showTab(tab: String) {
-        listOf("home" to pageHome, "history" to pageHistory, "settings" to pageSettings).forEach { (key, view) ->
+        listOf(
+            "home" to pageHome, "messages" to pageMessages, "history" to pageHistory,
+            "log" to pageLog, "settings" to pageSettings
+        ).forEach { (key, view) ->
             view.visibility = if (key == tab) View.VISIBLE else View.GONE
         }
-        listOf("home" to tabHome, "history" to tabHistory, "settings" to tabSettings).forEach { (key, tv) ->
+        listOf(
+            "home" to tabHome, "messages" to tabMessages, "history" to tabHistory,
+            "log" to tabLog, "settings" to tabSettings
+        ).forEach { (key, tv) ->
             if (key == tab) { tv.setTextColor(Color.parseColor("#075E54")); tv.setBackgroundColor(Color.parseColor("#E8F5E9")) }
             else { tv.setTextColor(Color.parseColor("#888888")); tv.setBackgroundColor(Color.WHITE) }
         }
+        if (tab == "log") refreshLogView()
+        if (tab == "messages") updateMsgLinkCount()
+        if (tab == "history") updateHistoryCount()
     }
 
     private fun applyTheme(dark: Boolean) {
         findViewById<View>(R.id.rootLayout).setBackgroundColor(if (dark) Color.parseColor("#121212") else Color.WHITE)
     }
+
+    // =====================================================================
+    // Sistema: permissões, notificações, tela
+    // =====================================================================
 
     private fun isAccessibilityEnabled(): Boolean {
         val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
@@ -716,38 +1422,80 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun sendFinishedNotification(joined: Int, waiting: Int, failed: Int) {
+    private fun sendFinishedNotification(text: String) {
         val nm = getSystemService(NotificationManager::class.java)
         val notif = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("On Groups — Concluido!")
-            .setContentText("✅ $joined entrou  ⏳ $waiting aguardando  ❌ $failed falhou")
+            .setContentText(text)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT).build()
         nm.notify(1, notif)
     }
 
-    override fun onPause() {
-        super.onPause()
-        // Salvar tudo ao minimizar
-        saveTypingSettings()
-        StorageManager.saveHistory(this)
-        StorageManager.savePendingLinks(this)
-        if (isRunning) {
-            StorageManager.saveResumeState(this, linkList, currentIndex,
-                selectedPackage, etMessage.text.toString().trim())
+    /** Android 13+: sem esta permissão nenhuma notificação (nem o status fixo nem os avisos) aparece. */
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, "android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED
+        ) {
+            try { requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 701) } catch (e: Exception) { }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        instance = null
-        // Salvar estado antes de fechar
-        StorageManager.saveHistory(this)
-        StorageManager.savePendingLinks(this)
-        wakeLock?.release()
-        wakeLock = null
-        if (!isRunning) ForegroundService.stop(this)
-        countdownRunnable?.let { handler.removeCallbacks(it) }
-        handler.removeCallbacksAndMessages(null)
+    private fun maybeAskBatteryOptimization() {
+        try {
+            if (Build.VERSION.SDK_INT < 23) return
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (pm.isIgnoringBatteryOptimizations(packageName)) return
+            if (StorageManager.getPref(this, "battery_asked") == "1") return
+            StorageManager.setPref(this, "battery_asked", "1")
+            AlertDialog.Builder(this)
+                .setTitle("Liberar uso de bateria?")
+                .setMessage(
+                    "Para o On Groups continuar trabalhando com o app em segundo plano, libere o uso de bateria. " +
+                        "Depois, vale também fixar o app nos recentes (cadeado) do seu celular."
+                )
+                .setPositiveButton("Liberar") { _, _ -> requestIgnoreBattery() }
+                .setNegativeButton("Depois", null)
+                .show()
+        } catch (e: Exception) { }
+    }
+
+    private fun requestIgnoreBattery() {
+        try {
+            startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        } catch (e: Exception) {
+            try { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) } catch (e2: Exception) { }
+        }
+    }
+
+    /** Quando o app volta sozinho (resultado de um grupo ou recuperação), acende a tela e aparece mesmo com bloqueio de deslizar. */
+    @Suppress("DEPRECATION")
+    private fun showOverLockScreen() {
+        try {
+            if (Build.VERSION.SDK_INT >= 27) {
+                setShowWhenLocked(true)
+                setTurnScreenOn(true)
+            } else {
+                window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager
+            if (Build.VERSION.SDK_INT >= 26 && km.isKeyguardLocked && !km.isDeviceSecure) {
+                km.requestDismissKeyguard(this, null)
+            }
+        } catch (e: Exception) { }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun clearScreenFlags() {
+        try {
+            if (Build.VERSION.SDK_INT >= 27) {
+                setShowWhenLocked(false)
+                setTurnScreenOn(false)
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
+            }
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } catch (e: Exception) { }
     }
 }

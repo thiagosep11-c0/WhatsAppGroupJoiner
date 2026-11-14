@@ -21,6 +21,7 @@ class GroupJoinerService : AccessibilityService() {
     private var timeoutRunnable: Runnable? = null
     private var checkRunnable: Runnable? = null
     private var typingRunnable: Runnable? = null
+    private var activeSeq = 0L
 
     companion object {
         var serviceInstance: GroupJoinerService? = null
@@ -41,9 +42,10 @@ class GroupJoinerService : AccessibilityService() {
         hasReturned = false
         cancelAll()
         if (waiting) {
+            activeSeq = RunRuntime.groupSeq
             scheduleCheck(5000L, 1)
             timeoutRunnable = Runnable {
-                if (isActive) safeFinish("invalid")
+                if (isActive) safeFinish(failureStatus())
             }
             handler.postDelayed(timeoutRunnable!!, 20_000L)
         }
@@ -92,7 +94,7 @@ class GroupJoinerService : AccessibilityService() {
             val root = rootInActiveWindow
             if (root == null) {
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
-                else safeFinish("invalid")
+                else safeFinish("retry_env")
                 return
             }
 
@@ -100,7 +102,7 @@ class GroupJoinerService : AccessibilityService() {
             if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") {
                 safeRecycle(root)
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
-                else safeFinish("invalid")
+                else safeFinish("retry_env")
                 return
             }
 
@@ -123,7 +125,7 @@ class GroupJoinerService : AccessibilityService() {
             }
         } catch (e: Exception) {
             // Qualquer crash — volta pro app com segurança
-            safeFinish("invalid")
+            safeFinish("retry_env")
         }
     }
 
@@ -139,14 +141,19 @@ class GroupJoinerService : AccessibilityService() {
         if (hasReturned) return
         hasReturned = true
         isActive = false
+        val seq = activeSeq
         try {
             val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
             intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            // o resultado também vai dentro do Intent: se a tela do app tiver sido fechada pelo sistema,
+            // a nova tela recebe o resultado e o processo continua
+            intent?.putExtra(MainActivity.EXTRA_STATUS, status)
+            intent?.putExtra(MainActivity.EXTRA_SEQ, seq)
             intent?.let { startActivity(it) }
         } catch (e: Exception) {}
         handler.postDelayed({
             hasReturned = false
-            MainActivity.instance?.onGroupProcessed(status)
+            MainActivity.instance?.onGroupProcessed(status, seq)
         }, 600L)
     }
 
@@ -259,7 +266,7 @@ class GroupJoinerService : AccessibilityService() {
             handler.postDelayed({
                 try {
                     val root2 = rootInActiveWindow ?: return@postDelayed
-                    clickSendButton(root2)
+                    if (clickSendButton(root2)) markSentNow()
                     safeRecycle(root2)
                 } catch (e: Exception) {}
             }, 1500L)
@@ -298,7 +305,7 @@ class GroupJoinerService : AccessibilityService() {
         val words = HumanTyping.splitWords(messageToSend)
         // O limite de 20 s do setWaiting() não serve para digitar: troca por um proporcional ao tamanho da mensagem
         timeoutRunnable?.let { handler.removeCallbacks(it) }
-        val limit = Runnable { if (isActive) safeFinish("invalid") }
+        val limit = Runnable { if (isActive) safeFinish("retry_env") }
         timeoutRunnable = limit
         handler.postDelayed(limit, 60_000L + words.size * 6_000L)
         scheduleTyping(HumanTyping.readPauseMs()) { typingFocus(words) }
@@ -341,7 +348,7 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun typingFocus(words: List<String>) {
         val ok = withInputField { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
-        if (!ok) { safeFinish("invalid"); return }
+        if (!ok) { safeFinish("retry_env"); return }
         scheduleTyping(HumanTyping.focusPauseMs() + HumanTyping.wordDelayMs(words[0], typingWpm)) {
             typingWord(words, 0, "")
         }
@@ -367,7 +374,10 @@ class GroupJoinerService : AccessibilityService() {
             safeRecycle(root)
         }
         when {
-            clicked -> scheduleTyping(HumanTyping.stayAfterSendMs()) { leaveChat("message_sent") }
+            clicked -> {
+                markSentNow() // anota na hora: se algo cair depois, o app não manda de novo nesse grupo
+                scheduleTyping(HumanTyping.stayAfterSendMs()) { leaveChat("message_sent") }
+            }
             attempt < 3 -> scheduleTyping(900L) { typingSend(attempt + 1) }
             else -> clearDraftAndFinish()
         }
@@ -376,7 +386,40 @@ class GroupJoinerService : AccessibilityService() {
     // Não conseguiu enviar (tela mudou / sem botão de enviar): apaga o que foi digitado para não deixar rascunho solto no grupo
     private fun clearDraftAndFinish() {
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
-        safeFinish("invalid")
+        safeFinish("retry_env")
+    }
+
+    // Falha sem causa clara: se o WhatsApp não está na frente, o problema é do ambiente (tela/WhatsApp), não do link
+    private fun failureStatus(): String {
+        return try {
+            val root = rootInActiveWindow
+            val pkg = root?.packageName?.toString() ?: ""
+            safeRecycle(root)
+            if (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") "invalid" else "retry_env"
+        } catch (e: Exception) { "retry_env" }
+    }
+
+    // Chamado pelo vigia: traz o app para a frente e manda ele retomar o processo
+    fun relaunchApp(recover: Boolean) {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
+            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (recover) intent?.putExtra(MainActivity.EXTRA_RECOVER, true)
+            intent?.let { startActivity(it) }
+        } catch (e: Exception) {}
+    }
+
+    // Cancela o que estiver em andamento neste grupo (timers, digitação) e apaga rascunho, se houver
+    fun abortCurrent() {
+        isActive = false
+        cancelAll()
+        hasReturned = false
+        try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
+    }
+
+    private fun markSentNow() {
+        val link = RunRuntime.currentLink ?: return
+        try { StorageManager.markSent(applicationContext, link) } catch (e: Exception) {}
     }
 
     // Sai do chat (BACK x2), volta ao app e informa o resultado
