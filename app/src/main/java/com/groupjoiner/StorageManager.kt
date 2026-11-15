@@ -219,6 +219,16 @@ object StorageManager {
         } catch (e: Exception) { }
     }
 
+    // Desfaz o registro de envio (quando o toque em Enviar não fez a mensagem sair de fato): assim a nova tentativa não é pulada
+    fun unmarkSent(context: Context, link: String, pkg: String) {
+        try {
+            val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)
+            val o = JSONObject(p.getString("sent_log", "{}") ?: "{}")
+            o.remove(sentKey(pkg, link))
+            p.edit().putString("sent_log", o.toString()).apply()
+        } catch (e: Exception) { }
+    }
+
     fun lastSent(context: Context, link: String, pkg: String): Long {
         return try {
             val p = context.getSharedPreferences(SETTINGS_PREFS, Context.MODE_PRIVATE)

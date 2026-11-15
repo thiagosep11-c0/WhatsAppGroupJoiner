@@ -561,7 +561,16 @@
                 android:layout_width="match_parent" android:layout_height="44dp"
                 android:text="🔋 Liberar uso de bateria (recomendado)"
                 android:backgroundTint="#1565C0" android:textColor="#FFFFFF"
-                android:textSize="13sp" android:layout_marginBottom="16dp"/>
+                android:textSize="13sp" android:layout_marginBottom="8dp"/>
+
+            <Button android:id="@+id/btnAppSettings"
+                android:layout_width="match_parent" android:layout_height="44dp"
+                android:text="⚙ Permissões do app (janelas em segundo plano)"
+                android:backgroundTint="#37474F" android:textColor="#FFFFFF"
+                android:textSize="13sp" android:layout_marginBottom="4dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="Se o app ficar preso no WhatsApp e não voltar sozinho, abra as permissões do app e ligue a opção de exibir janelas ou pop-ups em segundo plano (em Xiaomi, Realme, Oppo e outros aparece como Outras permissões ou Iniciar em segundo plano). Deixe também o app sem restrição de bateria."
+                android:textSize="11sp" android:textColor="#666666" android:layout_marginBottom="16dp"/>
 
             <View android:layout_width="match_parent" android:layout_height="1dp"
                 android:background="#E0E0E0" android:layout_marginBottom="16dp"/>

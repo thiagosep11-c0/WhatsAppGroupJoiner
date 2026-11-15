@@ -50,6 +50,7 @@ fun RunSnapshot.summaryLine(): String {
 object RunRuntime {
     @Volatile var currentLink: String? = null
     @Volatile var currentPkg: String = ""      // WhatsApp (normal ou Business) que está tratando o grupo atual
+    @Volatile var leftChatOk: Boolean = true   // false = não deu para confirmar que saímos do chat anterior (o próximo grupo não escreve às cegas)
     @Volatile var mentionNote: String = ""     // o que aconteceu com a marcação @todos no grupo atual (vai para o registro)
     @Volatile var mentionDumps: Int = 0        // quantos diagnósticos da marcação já foram gravados nesta sessão (máx. 3)
     @Volatile var groupSeq: Long = 0L

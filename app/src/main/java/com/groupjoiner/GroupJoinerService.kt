@@ -107,10 +107,20 @@ class GroupJoinerService : AccessibilityService() {
             }
 
             val pkg = root.packageName?.toString() ?: ""
-            if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") {
+            // só vale o WhatsApp ESCOLHIDO (normal ou Business): nunca age no outro
+            if (!isTargetWhatsApp(pkg)) {
                 safeRecycle(root)
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
                 else safeFinish("retry_env")
+                return
+            }
+
+            // mensagens: se o chat anterior pode ter ficado aberto, não escreve aqui (a mensagem podia ir para o grupo errado):
+            // sai do WhatsApp e refaz este grupo do zero
+            if (isSendingMessage && !RunRuntime.leftChatOk) {
+                safeRecycle(root)
+                RunLog.add(applicationContext, "⚠ O chat anterior pode ter ficado aberto: saio do WhatsApp e refaço este grupo")
+                safeFinish("retry_env")
                 return
             }
 
@@ -138,11 +148,60 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun safeFinish(status: String) {
+        exitAndReturn(status)
+    }
+
+    // ---------------- Saída segura do WhatsApp e volta ao app ----------------
+    // Antes: dois toques em Voltar "às cegas". Se o WhatsApp já tinha saído (ou nunca abriu), o Voltar caía no PRÓPRIO app e o fechava.
+    // Agora: só aperta Voltar enquanto o WhatsApp escolhido estiver na frente, confere a cada passo e para assim que sair do chat.
+
+    private class Front(val known: Boolean, val whatsapp: Boolean, val composer: Boolean)
+
+    private fun readFront(): Front {
+        val root: AccessibilityNodeInfo? = try { rootInActiveWindow } catch (e: Exception) { null }
+        if (root == null) return Front(false, false, false)
+        return try {
+            val wa = isTargetRoot(root)
+            val input = if (wa) findChatInput(root) else null
+            val composer = input != null
+            safeRecycle(input)
+            Front(true, wa, composer)
+        } catch (e: Exception) {
+            Front(false, false, false)
+        } finally {
+            safeRecycle(root)
+        }
+    }
+
+    private fun exitAndReturn(status: String) {
         isActive = false
         cancelAll()
-        try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (e: Exception) {}
-        handler.postDelayed({ try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (e: Exception) {} }, 800L)
-        handler.postDelayed({ returnToApp(status) }, 1600L)
+        // um instante para o que acabou de ser tocado (Enviar, Entrar...) terminar antes de sair
+        handler.postDelayed({ exitStep(status, 0, 0) }, 800L)
+    }
+
+    private fun exitStep(status: String, backs: Int, unknown: Int) {
+        val f = readFront()
+        when {
+            !f.known -> {
+                // janela em transição: espera um pouco; se continuar sem ler, assume que o WhatsApp não está na frente
+                if (unknown < 3) handler.postDelayed({ exitStep(status, backs, unknown + 1) }, 500L)
+                else finishExit(status, true)
+            }
+            !f.whatsapp -> finishExit(status, true)                 // outro app na frente (o nosso ou a tela inicial): NÃO aperta Voltar
+            !f.composer && backs >= 2 -> finishExit(status, true)   // já está fora do chat (2 toques: o 1º pode só ter fechado o teclado)
+            backs >= 5 -> finishExit(status, false)                 // 5 toques e ainda está no chat
+            else -> {
+                try { performGlobalAction(GLOBAL_ACTION_BACK) } catch (e: Exception) {}
+                handler.postDelayed({ exitStep(status, backs + 1, 0) }, 900L)
+            }
+        }
+    }
+
+    private fun finishExit(status: String, left: Boolean) {
+        RunRuntime.leftChatOk = left
+        if (!left) RunLog.add(applicationContext, "⚠ Não consegui sair da conversa do WhatsApp (5 toques em Voltar). Volto ao app mesmo assim")
+        returnToApp(status)
     }
 
     private fun returnToApp(status: String) {
@@ -150,19 +209,47 @@ class GroupJoinerService : AccessibilityService() {
         hasReturned = true
         isActive = false
         val seq = activeSeq
-        try {
-            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
-            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-            // o resultado também vai dentro do Intent: se a tela do app tiver sido fechada pelo sistema,
-            // a nova tela recebe o resultado e o processo continua
-            intent?.putExtra(MainActivity.EXTRA_STATUS, status)
-            intent?.putExtra(MainActivity.EXTRA_SEQ, seq)
-            intent?.let { startActivity(it) }
-        } catch (e: Exception) {}
+        // o resultado também vai dentro do Intent: se a tela do app tiver sido fechada pelo sistema,
+        // a nova tela recebe o resultado e o processo continua
+        bringAppToFront(1) { intent ->
+            intent.putExtra(MainActivity.EXTRA_STATUS, status)
+            intent.putExtra(MainActivity.EXTRA_SEQ, seq)
+        }
         handler.postDelayed({
             hasReturned = false
             MainActivity.instance?.onGroupProcessed(status, seq)
         }, 600L)
+    }
+
+    private var lastFrontAlertAt = 0L
+
+    /** Traz o app para a frente e CONFERE: se não apareceu, tenta de novo (até 3 vezes); no fim avisa com uma notificação para tocar. */
+    private fun bringAppToFront(attempt: Int, extras: ((Intent) -> Unit)?) {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
+            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (intent != null && attempt == 1 && extras != null) extras(intent)
+            intent?.let { startActivity(it) }
+        } catch (e: Exception) {}
+        handler.postDelayed({
+            if (MainActivity.isForeground) return@postDelayed
+            if (attempt < 3) {
+                bringAppToFront(attempt + 1, null)
+            } else {
+                RunLog.add(
+                    applicationContext,
+                    "⚠ O app não voltou para a frente sozinho (o celular pode estar bloqueando janelas em segundo plano: veja a aba Config)"
+                )
+                val agora = System.currentTimeMillis()
+                if (agora - lastFrontAlertAt > 5 * 60_000L) {
+                    lastFrontAlertAt = agora
+                    ForegroundService.alert(
+                        applicationContext, "On Groups ficou em segundo plano",
+                        "O WhatsApp ficou na frente. Toque aqui para voltar ao app."
+                    )
+                }
+            }
+        }, 2000L)
     }
 
     // --- Fase 1: Entrar no grupo ---
@@ -214,11 +301,13 @@ class GroupJoinerService : AccessibilityService() {
                 if (node.isClickable && combined.isNotBlank()) {
                     when {
                         joinKw.any { combined.contains(it) } -> {
+                            RunLog.add(applicationContext, "👆 Toque (varredura de entrada): ${describeNode(node)}")
                             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             queue.forEach { safeRecycle(it) }
                             return "joined"
                         }
                         requestKw.any { combined.contains(it) } -> {
+                            RunLog.add(applicationContext, "👆 Toque (varredura de pedido): ${describeNode(node)}")
                             node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                             queue.forEach { safeRecycle(it) }
                             return "requested"
@@ -249,7 +338,8 @@ class GroupJoinerService : AccessibilityService() {
                 if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "admin_only"
             }
             // Detectar campo desabilitado (campo existe mas nao é editável)
-            val inputNode = findEditText(root)
+            // o campo de digitar de um CHAT (na parte de baixo da tela): nunca a barra de pesquisa do topo
+            val inputNode = findChatInput(root)
             if (inputNode == null) {
                 // Verifica se tem campo mas desabilitado
                 val disabledInput = findDisabledInput(root)
@@ -259,51 +349,70 @@ class GroupJoinerService : AccessibilityService() {
                 }
                 return "not_found"
             }
-            if (humanTyping || hasMention(messageToSend)) {
-                // Modo humano: lê o grupo, digita palavra por palavra, relê e envia (passos agendados abaixo).
-                // Mensagem com @todos usa o mesmo caminho (precisa digitar aos poucos e tocar na opção "Todos"), mesmo sem digitação humana.
+            if (messageToSend.isBlank()) {
                 safeRecycle(inputNode)
-                startHumanTyping()
-                return "typing"
+                RunLog.add(applicationContext, "⚠ A mensagem programada está vazia: não enviei nada")
+                return "invalid"
             }
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            val args = Bundle()
-            args.putString(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, messageToSend)
-            inputNode.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            // Todo envio passa pelos mesmos passos conferidos (digita, confere o texto, toca em Enviar, confere que saiu).
+            // Com a digitação humana desligada os passos são curtos e o texto vai de uma vez; antes esse caminho mandava sair do chat
+            // enquanto ainda tocava em Enviar, e a mensagem podia ficar só como rascunho.
             safeRecycle(inputNode)
-
-            handler.postDelayed({
-                try {
-                    val root2 = rootInActiveWindow ?: return@postDelayed
-                    if (clickSendButton(root2)) markSentNow()
-                    safeRecycle(root2)
-                } catch (e: Exception) {}
-            }, 1500L)
-
-            "message_sent"
+            startHumanTyping()
+            return "typing"
         } catch (e: Exception) {
             "not_found"
         }
     }
 
-    private fun clickSendButton(root: AccessibilityNodeInfo): Boolean {
-        return try {
-            val sendKw = listOf("enviar", "send", "send message")
-            val queue = ArrayDeque<AccessibilityNodeInfo>()
-            queue.add(root)
-            while (queue.isNotEmpty()) {
-                val node = queue.removeFirst()
-                val cd = (node.contentDescription?.toString() ?: "").lowercase()
-                val txt = (node.text?.toString() ?: "").lowercase()
-                if (node.isClickable && sendKw.any { cd.contains(it) || txt.contains(it) }) {
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    queue.forEach { safeRecycle(it) }
-                    return true
+    private val sendLabels = setOf("enviar", "send", "enviar mensagem", "send message")
+
+    // O botão Enviar do chat: prefere o id "send"; senão o rótulo exato (Enviar/Send); só em último caso uma palavra parecida,
+    // e só na metade de baixo da tela. Só vale botão visível, ligado e tocável.
+    private fun findSendButton(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var byId: AccessibilityNodeInfo? = null
+        var byLabel: AccessibilityNodeInfo? = null
+        var byWord: AccessibilityNodeInfo? = null
+        val altura = resources.displayMetrics.heightPixels
+        val b = Rect()
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen < 800) {
+            val n = q.removeFirst()
+            seen++
+            if (n.isClickable && n.isEnabled && n.isVisibleToUser) {
+                val id = n.viewIdResourceName ?: ""
+                val cd = norm(n.contentDescription?.toString() ?: "").trim()
+                val tx = norm(n.text?.toString() ?: "").trim()
+                if (id.endsWith(":id/send")) {
+                    if (byId == null) byId = n
+                } else if (cd in sendLabels || tx in sendLabels) {
+                    if (byLabel == null) byLabel = n
+                } else if (cd.contains("enviar") || cd.contains("send") || tx.contains("enviar") || tx.contains("send")) {
+                    n.getBoundsInScreen(b)
+                    if (b.top > altura / 2 && byWord == null) byWord = n
                 }
-                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
             }
-            false
-        } catch (e: Exception) { false }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return byId ?: byLabel ?: byWord
+    }
+
+    private val knownLabels = setOf(
+        "enviar", "send", "enviar mensagem", "send message", "entrar no grupo", "join group", "entrar", "join", "participar",
+        "enviar pedido", "send request", "solicitar", "request to join", "cancelar pedido", "cancel request",
+        "todos", "@todos", "mais opcoes", "more options"
+    )
+
+    private fun showLabel(s: String): String =
+        if (s.isEmpty()) "" else if (norm(s).trim() in knownLabels) s else mask(s.take(20))
+
+    // Descrição curta de um botão para o registro: rótulos conhecidos de botão aparecem; qualquer outro texto sai com letras trocadas por x
+    private fun describeNode(n: AccessibilityNodeInfo?): String {
+        if (n == null) return "-"
+        val id = n.viewIdResourceName?.substringAfterLast('/') ?: "-"
+        return "id=$id texto=${showLabel(n.text?.toString() ?: "")} desc=${showLabel(n.contentDescription?.toString() ?: "")}"
     }
 
     // --- Fase 2 (modo humano): passos agendados ---
@@ -321,6 +430,8 @@ class GroupJoinerService : AccessibilityService() {
     private fun startHumanTyping() {
         val words = HumanTyping.splitWords(messageToSend)
         mentionTried = false
+        mentionInvolved = false
+        expectedPlain = messageToSend.trim()   // o que o campo precisa ter na hora de enviar
         // O limite de 20 s do setWaiting() não serve para digitar: troca por um proporcional ao tamanho da mensagem
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         val limit = Runnable { if (isActive) safeFinish("retry_env") }
@@ -344,7 +455,7 @@ class GroupJoinerService : AccessibilityService() {
         val root = rootInActiveWindow
         return try {
             val pkg = root?.packageName?.toString() ?: ""
-            var input = if (root != null && (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b")) findEditText(root) else null
+            var input = if (root != null && isTargetWhatsApp(pkg)) findChatInput(root) else null
             // a lista de marcação (@todos) pode virar a "janela ativa": então o campo de digitar está em outra janela do WhatsApp
             if (input == null) input = findInputInOtherWindows()
             if (input == null) {
@@ -365,8 +476,8 @@ class GroupJoinerService : AccessibilityService() {
             val todas = windows ?: return null
             for (w in todas) {
                 val r = w.root ?: continue
-                if (isWhatsAppRoot(r)) {
-                    val found = findEditText(r)
+                if (isTargetRoot(r)) {
+                    val found = findChatInput(r)
                     if (found != null) return found
                 }
             }
@@ -395,6 +506,21 @@ class GroupJoinerService : AccessibilityService() {
             typingMention(words, index, typed)
             return
         }
+        if (!humanTyping) {
+            // sem digitação humana: escreve de uma vez tudo o que vem até a marcação @todos (ou até o fim)
+            var end = index
+            val sb = StringBuilder(typed)
+            while (end < words.size && !(!mentionTried && isMentionWord(words[end]))) {
+                sb.append(words[end])
+                end++
+            }
+            val all = sb.toString()
+            val okAll = withInputField { setInputText(it, all) }
+            if (!okAll) { clearDraftAndFinish(); return }
+            if (end < words.size) scheduleTyping(dWord(words[end])) { typingMention(words, end, all) }
+            else scheduleTyping(dBeforeSend()) { typingSend(1) }
+            return
+        }
         val text = typed + words[index]
         val ok = withInputField { setInputText(it, text) }
         if (!ok) { clearDraftAndFinish(); return }
@@ -405,20 +531,109 @@ class GroupJoinerService : AccessibilityService() {
         }
     }
 
+    // ---------------- Envio conferido ----------------
+    // 1) Antes de enviar: o campo tem EXATAMENTE a mensagem programada? Se não, reescreve (texto simples) e confere de novo.
+    //    Nunca envia um texto diferente do programado: se não conseguir acertar, limpa o campo e não envia.
+    // 2) Toca no botão Enviar certo. 3) Depois do toque: o campo esvaziou? Se a mensagem continua lá, toca de novo (até 3 vezes).
+
+    private var expectedPlain = ""
+    private var mentionInvolved = false
+
+    private fun stripAll(s: String): String =
+        s.filter { !it.isWhitespace() && it.code != 0x200B && it.code != 0x200E && it.code != 0x200F && it.code != 0xFEFF }
+
+    // Espaços e quebras de linha não contam (o WhatsApp pode mudar); letras, números, emojis e a ordem contam.
+    // Com marcação @todos o WhatsApp mostra a marcação do jeito dele: só confere o que vem antes e o que vem depois dela.
+    private fun matchesExpected(curRaw: String): Boolean {
+        val cur = stripAll(curRaw)
+        if (cur.isEmpty()) return false
+        val exp = stripAll(expectedPlain)
+        if (!mentionInvolved) return cur == exp
+        val m = Regex("@todos", RegexOption.IGNORE_CASE).find(exp) ?: return cur == exp
+        val before = exp.substring(0, m.range.first)
+        val after = exp.substring(m.range.last + 1)
+        return cur.length >= before.length + after.length &&
+            cur.startsWith(before, ignoreCase = true) && cur.endsWith(after, ignoreCase = true)
+    }
+
+    // Campo vazio mostra o texto de dica ("Mensagem"): isso não é mensagem digitada
+    private fun showingHint(input: AccessibilityNodeInfo): Boolean = Build.VERSION.SDK_INT >= 26 && input.isShowingHintText
+
     private fun typingSend(attempt: Int) {
+        var cur = ""
+        var hint = false
+        val found = withInputField { input ->
+            cur = input.text?.toString() ?: ""
+            hint = showingHint(input)
+        }
+        if (!found) { clearDraftAndFinish(); return }
+        if (hint || !matchesExpected(cur)) {
+            if (attempt >= 3) {
+                RunLog.add(
+                    applicationContext,
+                    "⛔ O texto no campo não confere com a mensagem programada: NÃO enviei (campo limpo). " +
+                        "Esperado ${stripAll(expectedPlain).length} caracteres, campo ${stripAll(cur).length}" +
+                        (if (hint) " (campo mostrando a dica)" else "") +
+                        ". Campo (letras trocadas por x): ${mask(cur.take(60))}"
+                )
+                clearDraftAndFinish()
+                return
+            }
+            RunLog.add(applicationContext, "⚠ O texto no campo estava diferente do programado: reescrevi tudo (tentativa $attempt/3)")
+            mentionInvolved = false
+            val plain = expectedPlain
+            withInputField { setInputText(it, plain) }
+            scheduleTyping(600L) { typingSend(attempt + 1) }
+            return
+        }
+        typingSendClick(1)
+    }
+
+    private fun typingSendClick(n: Int) {
         val root = rootInActiveWindow
-        var clicked = false
-        if (root != null) {
-            clicked = clickSendButton(root)
-            safeRecycle(root)
+        var botao: AccessibilityNodeInfo? = null
+        var tocou = false
+        if (root != null && isTargetRoot(root)) {
+            botao = findSendButton(root)
+            if (botao != null) tocou = botao.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        val descricao = describeNode(botao)
+        safeRecycle(root)
+        when {
+            tocou -> {
+                if (n == 1) {
+                    markSentNow() // anota na hora: se algo cair depois, o app não manda de novo nesse grupo
+                    RunLog.add(applicationContext, "👆 Toquei em Enviar ($descricao)")
+                }
+                scheduleTyping(1_100L) { typingSendCheck(n, 1) }
+            }
+            n < 3 -> scheduleTyping(900L) { typingSendClick(n + 1) }
+            else -> {
+                RunLog.add(applicationContext, "⛔ Não achei o botão Enviar (3 tentativas): NÃO enviei (campo limpo)")
+                clearDraftAndFinish()
+            }
+        }
+    }
+
+    // Depois do toque em Enviar: o campo esvaziou? (esvaziou = a mensagem saiu)
+    private fun typingSendCheck(n: Int, checks: Int) {
+        var ainda = false
+        val found = withInputField { input ->
+            ainda = !showingHint(input) && matchesExpected(input.text?.toString() ?: "")
         }
         when {
-            clicked -> {
-                markSentNow() // anota na hora: se algo cair depois, o app não manda de novo nesse grupo
-                scheduleTyping(dStay()) { leaveChat("message_sent") }
+            !found && checks < 2 -> scheduleTyping(700L) { typingSendCheck(n, checks + 1) }
+            !found || !ainda -> scheduleTyping(dStay()) { leaveChat("message_sent") }
+            n < 3 -> scheduleTyping(300L) { typingSendClick(n + 1) }   // a mensagem continua no campo: o toque não enviou
+            else -> {
+                try {
+                    StorageManager.unmarkSent(
+                        applicationContext, RunRuntime.currentLink ?: "", RunRuntime.currentPkg.ifEmpty { "com.whatsapp" }
+                    )
+                } catch (e: Exception) {}
+                RunLog.add(applicationContext, "⛔ A mensagem continuou no campo depois de 3 toques em Enviar: NÃO saiu (campo limpo)")
+                clearDraftAndFinish()
             }
-            attempt < 3 -> scheduleTyping(900L) { typingSend(attempt + 1) }
-            else -> clearDraftAndFinish()
         }
     }
 
@@ -441,8 +656,6 @@ class GroupJoinerService : AccessibilityService() {
     private var mentionTouched = false
 
     private fun isMentionWord(piece: String): Boolean = piece.trim().equals("@todos", ignoreCase = true)
-
-    private fun hasMention(message: String): Boolean = HumanTyping.splitWords(message).any { isMentionWord(it) }
 
     private fun typingMention(words: List<String>, index: Int, typed: String) {
         mentionTried = true
@@ -485,12 +698,14 @@ class GroupJoinerService : AccessibilityService() {
         }
         val tocou = clickWithAncestors(option)
         if (tocou) mentionTouched = true
+        RunLog.add(applicationContext, "👆 Toquei na opção Todos (${describeNode(option)}), tentativa $attempt: ${if (tocou) "tocou" else "não deu para tocar"}")
         scheduleTyping(800L) { typingMentionPick(words, index, typed, attempt + 1, tocou) }
     }
 
     // A marcação entrou: segue com o resto da mensagem (colando) ou, se era a última palavra, vai para o envio
     private fun typingMentionDone(words: List<String>, index: Int) {
         RunRuntime.mentionNote = "marcou @todos"
+        mentionInvolved = true   // o WhatsApp mostra a marcação do jeito dele: a conferência olha só o que vem antes e depois
         val next = index + 1
         if (next < words.size) {
             // a quebra de linha que vinha depois do @todos não sobrevive à marcação: devolve na primeira palavra seguinte
@@ -506,6 +721,9 @@ class GroupJoinerService : AccessibilityService() {
     private fun typingMentionGiveUp(words: List<String>, index: Int, typed: String, why: String, roots: List<AccessibilityNodeInfo>) {
         RunRuntime.mentionNote = "sem marcar @todos ($why)"
         dumpMentionScreen(roots)
+        // a mensagem esperada passa a ser a original SEM o @todos
+        expectedPlain = words.filterIndexed { i, _ -> i != index }.joinToString("").trim()
+        mentionInvolved = false
         val temQuebra = words[index].substring(words[index].trimEnd().length).contains('\n')
         val seguir = if (temQuebra) typed + "\n" else typed
         withInputField { setInputText(it, typed) }
@@ -554,6 +772,7 @@ class GroupJoinerService : AccessibilityService() {
             val entrou = pasted && now.length > before.length && now.trimEnd().endsWith(piece.trimEnd())
             if (!entrou) {
                 setInputText(input, before + glue + piece)
+                mentionInvolved = true
                 RunRuntime.mentionNote = "⚠ @todos virou texto simples (não consegui colar o resto da mensagem)"
             }
         }
@@ -568,14 +787,14 @@ class GroupJoinerService : AccessibilityService() {
         val list = mutableListOf<AccessibilityNodeInfo>()
         try {
             val ativa = rootInActiveWindow
-            if (ativa != null && isWhatsAppRoot(ativa)) list.add(ativa)
+            if (ativa != null && isTargetRoot(ativa)) list.add(ativa)
         } catch (e: Exception) {}
         try {
             val todas = windows
             if (todas != null) {
                 for (w in todas) {
                     val r = w.root
-                    if (r != null && isWhatsAppRoot(r) && list.none { it == r }) list.add(r)
+                    if (r != null && isTargetRoot(r) && list.none { it == r }) list.add(r)
                 }
             }
         } catch (e: Exception) {}
@@ -1049,12 +1268,8 @@ class GroupJoinerService : AccessibilityService() {
         try { ScanStore.save(applicationContext, scanPkg, ScanResult(rows, nota, scanDiag, System.currentTimeMillis())) } catch (e: Exception) {}
         scanPkg = ""
         RunLog.add(applicationContext, "🔍 Escaneamento concluído: ${rows.size} conversas lidas" + (if (nota.isNotEmpty()) " ($nota)" else ""))
-        try {
-            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
-            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
-            intent?.putExtra(MainActivity.EXTRA_SCAN_DONE, true)
-            intent?.let { startActivity(it) }
-        } catch (e: Exception) {}
+        // traz o app para a frente e confere que ele apareceu (senão tenta de novo e avisa)
+        bringAppToFront(1) { intent -> intent.putExtra(MainActivity.EXTRA_SCAN_DONE, true) }
     }
 
     private fun markSentNow() {
@@ -1063,13 +1278,9 @@ class GroupJoinerService : AccessibilityService() {
         try { StorageManager.markSent(applicationContext, link, pkg) } catch (e: Exception) {}
     }
 
-    // Sai do chat (BACK x2), volta ao app e informa o resultado
+    // Sai do chat com segurança (só aperta Voltar com o WhatsApp na frente, conferindo), volta ao app e informa o resultado
     private fun leaveChat(status: String) {
-        isActive = false
-        cancelAll()
-        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 800L)
-        handler.postDelayed({ performGlobalAction(GLOBAL_ACTION_BACK) }, 1500L)
-        handler.postDelayed({ returnToApp(status) }, 2300L)
+        exitAndReturn(status)
     }
 
     // --- Verificação de aprovação ---
@@ -1179,6 +1390,41 @@ class GroupJoinerService : AccessibilityService() {
         } catch (e: Exception) { "not_found" }
     }
 
+    // Só vale o WhatsApp ESCOLHIDO para este processo (normal ou Business); sem escolha registrada, qualquer um dos dois
+    private fun isTargetWhatsApp(pkg: String): Boolean {
+        val want = RunRuntime.currentPkg
+        return if (want.isNotEmpty()) pkg == want else (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b")
+    }
+
+    private fun isTargetRoot(root: AccessibilityNodeInfo): Boolean = isTargetWhatsApp(root.packageName?.toString() ?: "")
+
+    // O campo de digitar de um CHAT: EditText editável na parte de baixo da tela (ou com id "entry"); ignora a barra de pesquisa do topo
+    // (o Escanear tem o seu próprio findComposer, que reconhece o campo pela dica "Mensagem")
+    private fun findChatInput(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        return try {
+            val altura = resources.displayMetrics.heightPixels
+            val b = Rect()
+            val queue = ArrayDeque<AccessibilityNodeInfo>()
+            queue.add(root)
+            while (queue.isNotEmpty()) {
+                val node = queue.removeFirst()
+                if (node.isEditable && node.className?.toString()?.contains("EditText") == true) {
+                    node.getBoundsInScreen(b)
+                    val id = node.viewIdResourceName ?: ""
+                    // dica do campo de chat ("Mensagem"/"Message"): outro jeito de reconhecer quando o campo cresce (mensagem longa)
+                    val dica = if (Build.VERSION.SDK_INT >= 26) (node.hintText?.toString() ?: "") else ""
+                    val rotulo = norm((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "") + " " + dica)
+                    if (id.endsWith("/entry") || b.top > altura * 0.35 || rotulo.contains("mensagem") || rotulo.contains("message")) {
+                        queue.forEach { safeRecycle(it) }
+                        return node
+                    }
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { queue.add(it) }
+            }
+            null
+        } catch (e: Exception) { null }
+    }
+
     private fun findEditText(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         return try {
             val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -1198,11 +1444,13 @@ class GroupJoinerService : AccessibilityService() {
     private fun tryClickNode(node: AccessibilityNodeInfo): Boolean {
         return try {
             if (node.isClickable) {
+                RunLog.add(applicationContext, "👆 Toque (entrada): ${describeNode(node)}")
                 node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 return true
             }
             val p = node.parent
             if (p?.isClickable == true) {
+                RunLog.add(applicationContext, "👆 Toque (entrada): ${describeNode(p)}")
                 p.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 safeRecycle(p)
                 return true

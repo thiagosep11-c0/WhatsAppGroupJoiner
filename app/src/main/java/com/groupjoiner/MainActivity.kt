@@ -128,6 +128,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etPauseMax: EditText
     private lateinit var etCooldownHours: EditText
     private lateinit var btnBattery: Button
+    private lateinit var btnAppSettings: Button
 
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
@@ -165,6 +166,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         var instance: MainActivity? = null
+        @Volatile var isForeground = false   // o serviço de acessibilidade confere isto depois de trazer o app para a frente
         var selectedPackage = "com.whatsapp"
         const val CHANNEL_ID = "group_joiner_channel"
         const val EXTRA_STATUS = "grp_status"
@@ -189,7 +191,8 @@ class MainActivity : AppCompatActivity() {
         loadSavedSettings()
         setupTabs()
         setupButtons()
-        showTab("home")
+        val abaSalva = StorageManager.getPref(this, "last_tab", "home")
+        showTab(if (abaSalva in listOf("home", "messages", "auto", "history", "log", "settings")) abaSalva else "home")
         // Carregar histórico e pendentes salvos
         StorageManager.loadHistory(this)
         StorageManager.loadPendingLinks(this)
@@ -212,12 +215,15 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        isForeground = true
+        ForegroundService.clearAlert(this)   // o app voltou para a frente: avisos como "ficou em segundo plano" já não valem
         if (!runActive) renderIdleStatus()
         updateRunBanner()
     }
 
     override fun onPause() {
         super.onPause()
+        isForeground = false
         // Salvar tudo ao minimizar
         saveTypingSettings()
         saveSavedSettings()
@@ -321,6 +327,7 @@ class MainActivity : AppCompatActivity() {
         etPauseMax = findViewById(R.id.etPauseMax)
         etCooldownHours = findViewById(R.id.etCooldownHours)
         btnBattery = findViewById(R.id.btnBattery)
+        btnAppSettings = findViewById(R.id.btnAppSettings)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -515,6 +522,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnBattery.setOnClickListener { requestIgnoreBattery() }
+        // abre a página do app nas configurações do celular (permissões, janelas em segundo plano, bateria)
+        btnAppSettings.setOnClickListener {
+            try {
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                Toast.makeText(this, "Não consegui abrir as configurações do app.", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     // =====================================================================
@@ -605,6 +620,7 @@ class MainActivity : AppCompatActivity() {
         runActive = true
         isRunning = true
         isPaused = false
+        RunRuntime.leftChatOk = true   // processo novo: nenhum chat anterior em dúvida
         runStartedAt = System.currentTimeMillis()
         attempt = 1
         envFailures = 0
@@ -672,6 +688,8 @@ class MainActivity : AppCompatActivity() {
         val base = if (phase == Phase.MESSAGES && switchHumanTyping.isChecked) {
             val palavras = HumanTyping.splitWords(runMessage).size
             90_000L + palavras * 6_000L
+        } else if (phase == Phase.MESSAGES) {
+            75_000L   // sem digitação humana, mas com as conferências antes/depois de enviar e a saída do chat
         } else 50_000L
         // marcar @todos leva mais tempo (digitar aos poucos, esperar a lista, tocar, colar o resto)
         val extra = if (phase == Phase.MESSAGES && runMessage.contains("@todos", ignoreCase = true)) 30_000L else 0L
@@ -1121,6 +1139,7 @@ class MainActivity : AppCompatActivity() {
         isPaused = false
         pauseReason = ""
         RunRuntime.groupDone = true
+        RunRuntime.leftChatOk = true
         StorageManager.clearRun(this)
         RunLog.add(this, "⏹ $reason")
         wakeLock?.let { if (it.isHeld) it.release() }
@@ -1729,6 +1748,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showTab(tab: String) {
+        // lembra a aba: se o app fechar e abrir de novo, volta para a mesma página
+        try { StorageManager.setPref(this, "last_tab", tab) } catch (e: Exception) { }
         listOf(
             "home" to pageHome, "messages" to pageMessages, "auto" to pageAuto, "history" to pageHistory,
             "log" to pageLog, "settings" to pageSettings

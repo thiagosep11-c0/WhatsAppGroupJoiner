@@ -59,11 +59,16 @@ class ForegroundService : Service() {
         @Volatile private var statusText = "Toque para acompanhar o progresso"
 
         fun start(context: Context) {
-            val intent = Intent(context, ForegroundService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
+            // No Android 12+ ligar o serviço com o app em segundo plano lança exceção: sem este try o app inteiro fechava
+            try {
+                val intent = Intent(context, ForegroundService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } catch (e: Exception) {
+                RunLog.add(context, "⚠ Não consegui ligar o serviço em primeiro plano: ${e.message}")
             }
         }
 
@@ -168,7 +173,14 @@ class ForegroundService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIF_ID, buildNotification(this, statusText))
+        try {
+            startForeground(NOTIF_ID, buildNotification(this, statusText))
+        } catch (e: Exception) {
+            // sem isto o Android derruba o app se o serviço ficar sem o aviso fixo
+            RunLog.add(this, "⚠ Não consegui colocar o serviço em primeiro plano: ${e.message}")
+            stopSelf()
+            return START_NOT_STICKY
+        }
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, 5_000L)
         return START_STICKY // se o Android matar o processo, o serviço volta e o vigia retoma
