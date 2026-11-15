@@ -669,10 +669,13 @@ class MainActivity : AppCompatActivity() {
 
     /** Tempo máximo que um grupo pode levar antes de o vigia considerar que travou. */
     private fun groupBudgetMs(): Long {
-        return if (phase == Phase.MESSAGES && switchHumanTyping.isChecked) {
+        val base = if (phase == Phase.MESSAGES && switchHumanTyping.isChecked) {
             val palavras = HumanTyping.splitWords(runMessage).size
             90_000L + palavras * 6_000L
         } else 50_000L
+        // marcar @todos leva mais tempo (digitar aos poucos, esperar a lista, tocar, colar o resto)
+        val extra = if (phase == Phase.MESSAGES && runMessage.contains("@todos", ignoreCase = true)) 30_000L else 0L
+        return base + extra
     }
 
     fun openNextLink() {
@@ -916,9 +919,12 @@ class MainActivity : AppCompatActivity() {
                 addToHistory(link, status)
             }
         }
+        // marcação @todos: diz no registro se marcou ou por que não marcou naquele grupo
+        val marcacao = RunRuntime.mentionNote
         RunLog.add(
             this,
-            "${StatusInfo.icon(status)} ${Phase.label(phase)} ${currentIndex + 1}/${linkList.size}: ${StatusInfo.text(status)}"
+            "${StatusInfo.icon(status)} ${Phase.label(phase)} ${currentIndex + 1}/${linkList.size}: ${StatusInfo.text(status)}" +
+                (if (marcacao.isNotEmpty()) " · $marcacao" else "")
         )
         scheduleNext()
     }

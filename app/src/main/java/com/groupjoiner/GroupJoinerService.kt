@@ -1,7 +1,11 @@
 package com.groupjoiner
 
 import android.accessibilityservice.AccessibilityService
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.graphics.Rect
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -45,6 +49,8 @@ class GroupJoinerService : AccessibilityService() {
         cancelAll()
         if (waiting) {
             activeSeq = RunRuntime.groupSeq
+            RunRuntime.mentionNote = ""   // grupo novo: a marcação @todos começa do zero
+            mentionTried = false
             scheduleCheck(5000L, 1)
             timeoutRunnable = Runnable {
                 if (isActive) safeFinish(failureStatus())
@@ -253,8 +259,9 @@ class GroupJoinerService : AccessibilityService() {
                 }
                 return "not_found"
             }
-            if (humanTyping) {
-                // Modo humano: lê o grupo, digita palavra por palavra, relê e envia (passos agendados abaixo)
+            if (humanTyping || hasMention(messageToSend)) {
+                // Modo humano: lê o grupo, digita palavra por palavra, relê e envia (passos agendados abaixo).
+                // Mensagem com @todos usa o mesmo caminho (precisa digitar aos poucos e tocar na opção "Todos"), mesmo sem digitação humana.
                 safeRecycle(inputNode)
                 startHumanTyping()
                 return "typing"
@@ -303,14 +310,23 @@ class GroupJoinerService : AccessibilityService() {
     // Sequência por grupo: "lê" o grupo -> toca no campo -> escreve palavra por palavra -> relê -> envia -> fica um instante -> sai.
     // Cada passo busca a tela de novo (os nós antigos ficam inválidos) e confere que ainda é o WhatsApp.
 
+    // Tempos de cada passo: com digitação humana valem os tempos "de gente"; sem ela (só quando há @todos) ficam curtos
+    private fun dRead(): Long = if (humanTyping) HumanTyping.readPauseMs() else 400L
+    private fun dFocus(): Long = if (humanTyping) HumanTyping.focusPauseMs() else 250L
+    private fun dWord(word: String): Long = if (humanTyping) HumanTyping.wordDelayMs(word, typingWpm) else 60L
+    private fun dLetter(): Long = if (humanTyping) HumanTyping.letterDelayMs() else 40L
+    private fun dBeforeSend(): Long = if (humanTyping) HumanTyping.beforeSendPauseMs() else 400L
+    private fun dStay(): Long = if (humanTyping) HumanTyping.stayAfterSendMs() else 1_500L
+
     private fun startHumanTyping() {
         val words = HumanTyping.splitWords(messageToSend)
+        mentionTried = false
         // O limite de 20 s do setWaiting() não serve para digitar: troca por um proporcional ao tamanho da mensagem
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         val limit = Runnable { if (isActive) safeFinish("retry_env") }
         timeoutRunnable = limit
         handler.postDelayed(limit, 60_000L + words.size * 6_000L)
-        scheduleTyping(HumanTyping.readPauseMs()) { typingFocus(words) }
+        scheduleTyping(dRead()) { typingFocus(words) }
     }
 
     private fun scheduleTyping(delayMs: Long, action: () -> Unit) {
@@ -325,10 +341,12 @@ class GroupJoinerService : AccessibilityService() {
 
     // Acha o campo de mensagem na tela atual (só no WhatsApp) e roda [block] nele
     private fun withInputField(block: (AccessibilityNodeInfo) -> Unit): Boolean {
-        val root = rootInActiveWindow ?: return false
+        val root = rootInActiveWindow
         return try {
-            val pkg = root.packageName?.toString() ?: ""
-            val input = if (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") findEditText(root) else null
+            val pkg = root?.packageName?.toString() ?: ""
+            var input = if (root != null && (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b")) findEditText(root) else null
+            // a lista de marcação (@todos) pode virar a "janela ativa": então o campo de digitar está em outra janela do WhatsApp
+            if (input == null) input = findInputInOtherWindows()
             if (input == null) {
                 false
             } else {
@@ -342,6 +360,20 @@ class GroupJoinerService : AccessibilityService() {
         }
     }
 
+    private fun findInputInOtherWindows(): AccessibilityNodeInfo? {
+        return try {
+            val todas = windows ?: return null
+            for (w in todas) {
+                val r = w.root ?: continue
+                if (isWhatsAppRoot(r)) {
+                    val found = findEditText(r)
+                    if (found != null) return found
+                }
+            }
+            null
+        } catch (e: Exception) { null }
+    }
+
     private fun setInputText(input: AccessibilityNodeInfo, text: String) {
         val args = Bundle()
         args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
@@ -351,20 +383,25 @@ class GroupJoinerService : AccessibilityService() {
     private fun typingFocus(words: List<String>) {
         val ok = withInputField { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
         if (!ok) { safeFinish("retry_env"); return }
-        scheduleTyping(HumanTyping.focusPauseMs() + HumanTyping.wordDelayMs(words[0], typingWpm)) {
+        scheduleTyping(dFocus() + dWord(words[0])) {
             typingWord(words, 0, "")
         }
     }
 
     // Mostra a palavra [index] (o tempo de "escrevê-la" já passou) e agenda a próxima
     private fun typingWord(words: List<String>, index: Int, typed: String) {
+        // a primeira palavra @todos da mensagem vira marcação (as outras, se houver, ficam como texto)
+        if (!mentionTried && isMentionWord(words[index])) {
+            typingMention(words, index, typed)
+            return
+        }
         val text = typed + words[index]
         val ok = withInputField { setInputText(it, text) }
         if (!ok) { clearDraftAndFinish(); return }
         if (index + 1 < words.size) {
-            scheduleTyping(HumanTyping.wordDelayMs(words[index + 1], typingWpm)) { typingWord(words, index + 1, text) }
+            scheduleTyping(dWord(words[index + 1])) { typingWord(words, index + 1, text) }
         } else {
-            scheduleTyping(HumanTyping.beforeSendPauseMs()) { typingSend(1) }
+            scheduleTyping(dBeforeSend()) { typingSend(1) }
         }
     }
 
@@ -378,7 +415,7 @@ class GroupJoinerService : AccessibilityService() {
         when {
             clicked -> {
                 markSentNow() // anota na hora: se algo cair depois, o app não manda de novo nesse grupo
-                scheduleTyping(HumanTyping.stayAfterSendMs()) { leaveChat("message_sent") }
+                scheduleTyping(dStay()) { leaveChat("message_sent") }
             }
             attempt < 3 -> scheduleTyping(900L) { typingSend(attempt + 1) }
             else -> clearDraftAndFinish()
@@ -389,6 +426,236 @@ class GroupJoinerService : AccessibilityService() {
     private fun clearDraftAndFinish() {
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
         safeFinish("retry_env")
+    }
+
+    // ---------------- Marcação @todos (fase 2) ----------------
+    // Quando a mensagem tem a palavra @todos SOZINHA (com espaço antes e depois, ou no começo/fim), o app digita "@todos" letra por
+    // letra, espera o WhatsApp mostrar a opção "Todos" (só aparece em grupos pequenos, até 32 participantes) e toca nela.
+    // Se a opção não aparecer, tira o "@todos" do campo e envia o resto da mensagem (o motivo vai para o registro).
+    // Depois da marcação o campo guarda um pedaço "especial": reescrever o texto inteiro apagaria a marcação. Por isso as palavras
+    // que vêm DEPOIS dela são coladas no fim do campo (via área de transferência) em vez de reescrever tudo.
+
+    private val mentionLabels = setOf("todos", "@todos", "everyone", "@everyone", "all", "@all")
+    private val mentionTries = 6
+    private var mentionTried = false
+    private var mentionTouched = false
+
+    private fun isMentionWord(piece: String): Boolean = piece.trim().equals("@todos", ignoreCase = true)
+
+    private fun hasMention(message: String): Boolean = HumanTyping.splitWords(message).any { isMentionWord(it) }
+
+    private fun typingMention(words: List<String>, index: Int, typed: String) {
+        mentionTried = true
+        mentionTouched = false
+        typingMentionLetter(words, index, typed, words[index].trim(), 1)
+    }
+
+    // Escreve "@todos" aos poucos (@, @t, @to ...): é assim que o WhatsApp abre e filtra a lista de marcação
+    private fun typingMentionLetter(words: List<String>, index: Int, typed: String, token: String, k: Int) {
+        val ok = withInputField { setInputText(it, typed + token.substring(0, k)) }
+        if (!ok) { clearDraftAndFinish(); return }
+        if (k < token.length) {
+            scheduleTyping(dLetter()) { typingMentionLetter(words, index, typed, token, k + 1) }
+        } else {
+            scheduleTyping(1_000L) { typingMentionPick(words, index, typed, 1, false) }
+        }
+    }
+
+    // Procura a opção "Todos" na lista e toca nela; na volta confere se a lista sumiu (= a marcação entrou)
+    private fun typingMentionPick(words: List<String>, index: Int, typed: String, attempt: Int, clicked: Boolean) {
+        val roots = mentionRoots()
+        var found: AccessibilityNodeInfo? = null
+        for (r in roots) {
+            found = findMentionOption(r)
+            if (found != null) break
+        }
+        val option = found
+        if (option == null) {
+            when {
+                clicked -> typingMentionDone(words, index)
+                attempt < mentionTries -> scheduleTyping(700L) { typingMentionPick(words, index, typed, attempt + 1, false) }
+                else -> typingMentionGiveUp(words, index, typed, "a opção Todos não apareceu (grupo com mais de 32 participantes?)", roots)
+            }
+            return
+        }
+        if (attempt >= mentionTries) {
+            val why = if (mentionTouched) "toquei na opção Todos mas a lista não fechou" else "não consegui tocar na opção Todos"
+            typingMentionGiveUp(words, index, typed, why, roots)
+            return
+        }
+        val tocou = clickWithAncestors(option)
+        if (tocou) mentionTouched = true
+        scheduleTyping(800L) { typingMentionPick(words, index, typed, attempt + 1, tocou) }
+    }
+
+    // A marcação entrou: segue com o resto da mensagem (colando) ou, se era a última palavra, vai para o envio
+    private fun typingMentionDone(words: List<String>, index: Int) {
+        RunRuntime.mentionNote = "marcou @todos"
+        val next = index + 1
+        if (next < words.size) {
+            // a quebra de linha que vinha depois do @todos não sobrevive à marcação: devolve na primeira palavra seguinte
+            val nl = words[index].substring(words[index].trimEnd().length).filter { it == '\n' }
+            val w2 = if (nl.isEmpty()) words else words.toMutableList().also { it[next] = nl + it[next] }
+            scheduleTyping(dWord(w2[next])) { typingPaste(w2, next) }
+        } else {
+            scheduleTyping(dBeforeSend()) { typingSend(1) }
+        }
+    }
+
+    // Não deu para marcar: tira o "@todos" do campo e segue com o resto da mensagem (a quebra de linha que vinha depois dele fica)
+    private fun typingMentionGiveUp(words: List<String>, index: Int, typed: String, why: String, roots: List<AccessibilityNodeInfo>) {
+        RunRuntime.mentionNote = "sem marcar @todos ($why)"
+        dumpMentionScreen(roots)
+        val temQuebra = words[index].substring(words[index].trimEnd().length).contains('\n')
+        val seguir = if (temQuebra) typed + "\n" else typed
+        withInputField { setInputText(it, typed) }
+        val next = index + 1
+        when {
+            next < words.size -> scheduleTyping(dWord(words[next])) { typingWord(words, next, seguir) }
+            typed.isBlank() -> {
+                RunLog.add(applicationContext, "⚠ a mensagem só tinha @todos e a marcação não foi possível: nada para enviar")
+                safeFinish("invalid")
+            }
+            else -> scheduleTyping(dBeforeSend()) { typingSend(1) }
+        }
+    }
+
+    // Depois da marcação: cola a próxima palavra no fim do campo (reescrever o texto inteiro apagaria a marcação)
+    private fun typingPaste(words: List<String>, index: Int) {
+        val piece = words[index]
+        var before = ""
+        var glue = ""
+        var pasted = false
+        val ok = withInputField { input ->
+            before = input.text?.toString() ?: ""
+            glue = if (before.isNotEmpty() && !before.last().isWhitespace() && !piece.first().isWhitespace()) " " else ""
+            pasted = pasteAtEnd(input, glue + piece)
+        }
+        if (!ok) { clearDraftAndFinish(); return }
+        scheduleTyping(350L) { typingPasteCheck(words, index, before, glue, pasted) }
+    }
+
+    // Põe [text] na área de transferência e manda o campo colar (o cursor fica no fim depois da marcação)
+    private fun pasteAtEnd(input: AccessibilityNodeInfo, text: String): Boolean {
+        return try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("On Groups", text))
+            input.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            input.performAction(AccessibilityNodeInfo.ACTION_PASTE)
+        } catch (e: Exception) { false }
+    }
+
+    // Confere se a palavra colada apareceu no fim do campo. Se não, escreve o texto todo de uma vez:
+    // a marcação vira texto simples, mas a mensagem sai completa (melhor do que sair faltando pedaço).
+    private fun typingPasteCheck(words: List<String>, index: Int, before: String, glue: String, pasted: Boolean) {
+        val piece = words[index]
+        val ok = withInputField { input ->
+            val now = input.text?.toString() ?: ""
+            val entrou = pasted && now.length > before.length && now.trimEnd().endsWith(piece.trimEnd())
+            if (!entrou) {
+                setInputText(input, before + glue + piece)
+                RunRuntime.mentionNote = "⚠ @todos virou texto simples (não consegui colar o resto da mensagem)"
+            }
+        }
+        if (!ok) { clearDraftAndFinish(); return }
+        val next = index + 1
+        if (next < words.size) scheduleTyping(dWord(words[next])) { typingPaste(words, next) }
+        else scheduleTyping(dBeforeSend()) { typingSend(1) }
+    }
+
+    // Janelas do WhatsApp a olhar: a tela ativa e, se o Android listar, janelas extras (a lista de marcação pode ser flutuante)
+    private fun mentionRoots(): List<AccessibilityNodeInfo> {
+        val list = mutableListOf<AccessibilityNodeInfo>()
+        try {
+            val ativa = rootInActiveWindow
+            if (ativa != null && isWhatsAppRoot(ativa)) list.add(ativa)
+        } catch (e: Exception) {}
+        try {
+            val todas = windows
+            if (todas != null) {
+                for (w in todas) {
+                    val r = w.root
+                    if (r != null && isWhatsAppRoot(r) && list.none { it == r }) list.add(r)
+                }
+            }
+        } catch (e: Exception) {}
+        return list
+    }
+
+    // Acha, na tela, o item "Todos" da lista de marcação (nunca o campo de digitar). Havendo mais de um, o mais baixo (perto do campo).
+    private fun findMentionOption(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var exact: AccessibilityNodeInfo? = null
+        var exactTop = Int.MIN_VALUE
+        var loose: AccessibilityNodeInfo? = null
+        var looseTop = Int.MIN_VALUE
+        val r = Rect()
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen < 600) {
+            val n = q.removeFirst()
+            seen++
+            val cls = n.className?.toString() ?: ""
+            if (n.isVisibleToUser && !n.isEditable && !cls.contains("EditText")) {
+                val t = norm(n.text?.toString() ?: "").trim()
+                val d = norm(n.contentDescription?.toString() ?: "").trim()
+                if (t in mentionLabels || d in mentionLabels) {
+                    n.getBoundsInScreen(r)
+                    if (r.top > exactTop) { exact = n; exactTop = r.top }
+                } else if ((t.startsWith("todos") || t.startsWith("@todos")) && t.length <= 60) {
+                    n.getBoundsInScreen(r)
+                    if (r.top > looseTop) { loose = n; looseTop = r.top }
+                }
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return exact ?: loose
+    }
+
+    // Toca no nó ou, se ele não for clicável, no primeiro "pai" clicável (a linha inteira da lista)
+    private fun clickWithAncestors(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            var cur: AccessibilityNodeInfo? = node
+            var level = 0
+            while (cur != null && level < 6) {
+                if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                cur = cur.parent
+                level++
+            }
+            false
+        } catch (e: Exception) { false }
+    }
+
+    private fun maskKeep(s: String): String = if (norm(s).trim() in mentionLabels) s else mask(s.take(30))
+
+    // Quando a marcação falha, grava no registro a estrutura da tela (sem nomes: letras viram x) para eu calibrar a busca. Máx. 3 por sessão.
+    private fun dumpMentionScreen(roots: List<AccessibilityNodeInfo>) {
+        if (RunRuntime.mentionDumps >= 3) return
+        RunRuntime.mentionDumps++
+        try {
+            val sb = StringBuilder("🔍 Diagnóstico da marcação @todos (letras trocadas por x; só \"Todos\" fica legível)")
+            var n = 0
+            val b = Rect()
+            for ((wi, root) in roots.withIndex()) {
+                sb.append("\n   [janela ${wi + 1}] classe | id | texto | descrição | toque | topo-fundo")
+                val q = ArrayDeque<AccessibilityNodeInfo>()
+                q.add(root)
+                while (q.isNotEmpty() && n < 70) {
+                    val node = q.removeFirst()
+                    val txt = node.text?.toString() ?: ""
+                    val desc = node.contentDescription?.toString() ?: ""
+                    if (txt.isNotEmpty() || desc.isNotEmpty() || node.isClickable) {
+                        node.getBoundsInScreen(b)
+                        val cls = node.className?.toString()?.substringAfterLast('.') ?: "-"
+                        val id = node.viewIdResourceName?.substringAfterLast('/') ?: "-"
+                        sb.append("\n   $cls | $id | ${maskKeep(txt)} | ${maskKeep(desc)} | ${if (node.isClickable) "toque" else "-"} | ${b.top}-${b.bottom}")
+                        n++
+                    }
+                    for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+                }
+            }
+            RunLog.add(applicationContext, sb.toString())
+        } catch (e: Exception) {}
     }
 
     // Falha sem causa clara: se o WhatsApp não está na frente, o problema é do ambiente (tela/WhatsApp), não do link

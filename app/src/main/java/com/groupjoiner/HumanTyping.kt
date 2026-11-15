@@ -30,6 +30,7 @@ object HumanTyping {
         return ms.toLong().coerceIn(150L, 4_500L)
     }
 
+    fun letterDelayMs(): Long = Random.nextLong(120L, 300L)         // uma letra de cada vez (usado ao digitar @todos)
     fun readPauseMs(): Long = Random.nextLong(1_500L, 3_500L)       // "lê" o grupo antes de escrever
     fun focusPauseMs(): Long = Random.nextLong(400L, 900L)          // toca no campo e começa
     fun beforeSendPauseMs(): Long = Random.nextLong(700L, 1_800L)   // relê antes de enviar
