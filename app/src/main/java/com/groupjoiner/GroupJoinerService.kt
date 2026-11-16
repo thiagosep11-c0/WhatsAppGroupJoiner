@@ -920,6 +920,16 @@ class GroupJoinerService : AccessibilityService() {
         } catch (e: Exception) {}
     }
 
+    // Painel online: traz o app para a frente para cumprir um comando (a tela do app é quem conduz o processo)
+    fun relaunchForRemote() {
+        try {
+            val intent = packageManager.getLaunchIntentForPackage("com.groupjoiner")
+            intent?.addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent?.putExtra(MainActivity.EXTRA_REMOTE, true)
+            intent?.let { startActivity(it) }
+        } catch (e: Exception) {}
+    }
+
     // Cancela o que estiver em andamento (grupo atual: timers e digitação; escaneamento) e apaga rascunho, se houver
     fun abortCurrent() {
         isActive = false

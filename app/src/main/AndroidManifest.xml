@@ -44,6 +44,16 @@
             android:foregroundServiceType="dataSync"
             android:stopWithTask="false"/>
 
+        <!-- Reinício do celular ou atualização do app: volta a ficar online no painel se o Controle remoto estava ligado -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
         <service
             android:name=".GroupJoinerService"
             android:exported="true"

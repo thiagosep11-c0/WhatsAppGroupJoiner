@@ -46,16 +46,29 @@ class ForegroundService : Service() {
         }
     }
 
+    // Painel online com controle remoto ligado: manda o sinal no ritmo que o painel pediu (rápido enquanto alguém olha o painel)
+    private val remoteTick = object : Runnable {
+        override fun run() {
+            try {
+                if (RemoteControl.keepAlive(this@ForegroundService)) PanelClient.beatIfDue(this@ForegroundService)
+            } catch (e: Exception) { }
+            handler.postDelayed(this, 4_000L)
+        }
+    }
+
     companion object {
         const val CHANNEL_ID = "ongroups_foreground"
         const val ALERT_CHANNEL_ID = "ongroups_alert"
         const val NOTIF_ID = 1001
         const val ALERT_ID = 1002
         const val ACTION_STOP = "com.groupjoiner.STOP"
+        const val ACTION_REMOTE_OFF = "com.groupjoiner.REMOTE_OFF"
         const val TICK_MS = 15_000L
         const val PAUSE_SCREEN = "Tela bloqueada"
         const val PAUSE_SERVICE = "Serviço de acessibilidade desligado"
+        const val IDLE_TEXT = "Online no painel, esperando comandos"
         var isRunning = false
+        @Volatile private var idle = false   // true = nenhum processo rodando; o serviço só espera comandos do painel
         @Volatile private var statusText = "Toque para acompanhar o progresso"
 
         fun start(context: Context) {
@@ -73,11 +86,27 @@ class ForegroundService : Service() {
         }
 
         fun stop(context: Context) {
+            // controle remoto ligado: o serviço continua online esperando comandos do painel
+            if (RemoteControl.keepAlive(context)) {
+                showIdle(context)
+                return
+            }
             context.stopService(Intent(context, ForegroundService::class.java))
+        }
+
+        /** Notificação "online no painel, esperando comandos" (nenhum processo rodando). */
+        fun showIdle(context: Context) {
+            idle = true
+            statusText = IDLE_TEXT
+            if (!isRunning) return
+            try {
+                NotificationManagerCompat.from(context).notify(NOTIF_ID, buildNotification(context, IDLE_TEXT))
+            } catch (e: Exception) { }
         }
 
         /** Atualiza o texto da notificação fixa (aparece também na tela de bloqueio). */
         fun updateStatus(context: Context, text: String) {
+            idle = false
             statusText = text
             if (!isRunning) return
             try {
@@ -139,20 +168,27 @@ class ForegroundService : Service() {
 
         private fun buildNotification(context: Context, text: String): Notification {
             ensureChannels(context)
-            val stopIntent = Intent(context, ForegroundService::class.java).apply { action = ACTION_STOP }
-            val stopPending = PendingIntent.getService(context, 0, stopIntent, pendingFlags())
-            return NotificationCompat.Builder(context, CHANNEL_ID)
+            val builder = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("On Groups — rodando")
+                .setContentTitle(if (idle) "On Groups — online no painel" else "On Groups — rodando")
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setContentIntent(openPending(context))
-                .addAction(android.R.drawable.ic_delete, "Finalizar", stopPending)
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-                .build()
+            if (idle) {
+                // esperando comandos: o botão desliga o controle remoto (não há nada para finalizar)
+                val offIntent = Intent(context, ForegroundService::class.java).apply { action = ACTION_REMOTE_OFF }
+                val offPending = PendingIntent.getService(context, 2, offIntent, pendingFlags())
+                builder.addAction(android.R.drawable.ic_delete, "Desligar controle remoto", offPending)
+            } else {
+                val stopIntent = Intent(context, ForegroundService::class.java).apply { action = ACTION_STOP }
+                val stopPending = PendingIntent.getService(context, 0, stopIntent, pendingFlags())
+                builder.addAction(android.R.drawable.ic_delete, "Finalizar", stopPending)
+            }
+            return builder.build()
         }
     }
 
@@ -170,8 +206,25 @@ class ForegroundService : Service() {
             StorageManager.clearRun(this)
             MainActivity.instance?.stopRunFromOutside()
             clearAlert(this)
+            if (RemoteControl.keepAlive(this)) {
+                // controle remoto ligado: o serviço continua online esperando comandos
+                showIdle(this)
+                return START_STICKY
+            }
             stopSelf()
             return START_NOT_STICKY
+        }
+        if (intent?.action == ACTION_REMOTE_OFF) {
+            RemoteControl.setEnabled(this, false)
+            RunLog.add(this, "☁ Controle remoto desligado pelo botão da notificação")
+            PanelClient.beat(this, true)
+            MainActivity.instance?.refreshRemoteInfo()
+            val snapAtual = StorageManager.loadRun(this)
+            if (snapAtual == null || !snapAtual.active) {
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            return START_STICKY // há um processo rodando: o serviço continua só para ele
         }
         try {
             startForeground(NOTIF_ID, buildNotification(this, statusText))
@@ -183,6 +236,8 @@ class ForegroundService : Service() {
         }
         handler.removeCallbacks(tick)
         handler.postDelayed(tick, 5_000L)
+        handler.removeCallbacks(remoteTick)
+        handler.postDelayed(remoteTick, 3_000L)
         return START_STICKY // se o Android matar o processo, o serviço volta e o vigia retoma
     }
 
@@ -231,6 +286,13 @@ class ForegroundService : Service() {
         PanelClient.beat(this) // painel online: sinal de vida a cada 15 s enquanto o processo roda
         val snap = StorageManager.loadRun(this)
         if (snap == null || !snap.active) {
+            if (RemoteControl.keepAlive(this)) {
+                // controle remoto ligado: continua online esperando comandos (a CPU fica acordada para o app ouvir o painel)
+                holdLocks(screen = false, cpu = true)
+                if (!idle) showIdle(this)
+                idleTicks = 0
+                return
+            }
             holdLocks(screen = false, cpu = false)
             idleTicks++
             if (idleTicks >= 8) stopSelf() // ~2 min sem nada rodando

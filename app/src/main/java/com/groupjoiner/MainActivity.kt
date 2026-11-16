@@ -135,6 +135,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPanelPair: Button
     private lateinit var btnPanelTest: Button
     private lateinit var btnPanelUnpair: Button
+    private lateinit var switchRemote: Switch
+    private lateinit var tvRemoteInfo: TextView
+    private var pendingRemote = false   // chegou um comando do painel que espera esta tela abrir
+    private val remoteSwitchListener = CompoundButton.OnCheckedChangeListener { _, checked -> onRemoteSwitch(checked) }
 
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
@@ -179,6 +183,7 @@ class MainActivity : AppCompatActivity() {
         const val EXTRA_SEQ = "grp_seq"
         const val EXTRA_RECOVER = "recover"
         const val EXTRA_SCAN_DONE = "scan_done"
+        const val EXTRA_REMOTE = "remote_cmd"   // o painel online mandou um comando que precisa desta tela
         const val MAX_ATTEMPTS = 3
         const val STALE_MS = 15 * 60 * 1000L
     }
@@ -209,6 +214,7 @@ class MainActivity : AppCompatActivity() {
         // Se havia um processo em andamento (ou o sistema reabriu o app com um resultado), continua de onde parou
         handleIncoming(intent)
         updateRunBanner()
+        drainRemote()
         handler.postDelayed({ maybeAskBatteryOptimization() }, 1500L)
     }
 
@@ -217,6 +223,7 @@ class MainActivity : AppCompatActivity() {
         setIntent(intent)
         handleIncoming(intent)
         updateRunBanner()
+        drainRemote()
     }
 
     override fun onResume() {
@@ -226,6 +233,9 @@ class MainActivity : AppCompatActivity() {
         ForegroundService.clearAlert(this)   // o app voltou para a frente: avisos como "ficou em segundo plano" já não valem
         if (!runActive) renderIdleStatus()
         updateRunBanner()
+        // controle remoto ligado: garante que o serviço está online esperando comandos (ex.: depois de uma atualização do app)
+        if (RemoteControl.keepAlive(this) && !ForegroundService.isRunning) ForegroundService.start(this)
+        refreshRemoteInfo()
     }
 
     override fun onPause() {
@@ -341,6 +351,8 @@ class MainActivity : AppCompatActivity() {
         btnPanelPair = findViewById(R.id.btnPanelPair)
         btnPanelTest = findViewById(R.id.btnPanelTest)
         btnPanelUnpair = findViewById(R.id.btnPanelUnpair)
+        switchRemote = findViewById(R.id.switchRemote)
+        tvRemoteInfo = findViewById(R.id.tvRemoteInfo)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -586,11 +598,187 @@ class MainActivity : AppCompatActivity() {
                     .show()
             }
         }
+
+        // Controle remoto: desligado de fábrica; liga/desliga aqui (a chave é ajustada sem disparar o aviso)
+        switchRemote.isChecked = RemoteControl.isEnabled(this)
+        switchRemote.setOnCheckedChangeListener(remoteSwitchListener)
+        refreshRemoteInfo()
     }
 
     /** Mostra na aba Config se este celular está conectado ao painel online e como foi o último sinal. */
     private fun refreshPanelStatus() {
         runOnUiThread { tvPanelStatus.text = PanelClient.statusText(this) }
+    }
+
+    // =====================================================================
+    // Painel online: controle remoto (comandos que chegam do painel)
+    // =====================================================================
+
+    private fun setRemoteSwitchSilently(on: Boolean) {
+        switchRemote.setOnCheckedChangeListener(null)
+        switchRemote.isChecked = on
+        switchRemote.setOnCheckedChangeListener(remoteSwitchListener)
+    }
+
+    private fun onRemoteSwitch(checked: Boolean) {
+        if (checked && !PanelClient.isPaired(this)) {
+            setRemoteSwitchSilently(false)
+            Toast.makeText(this, "Conecte este celular ao painel primeiro (código acima).", Toast.LENGTH_LONG).show()
+            return
+        }
+        RemoteControl.setEnabled(this, checked)
+        RunLog.add(this, if (checked) "☁ Controle remoto LIGADO: o painel pode iniciar, pausar e finalizar" else "☁ Controle remoto desligado")
+        if (checked) {
+            ForegroundService.start(this)   // fica online esperando comandos (notificação fixa)
+        } else if (!runActive && !isRunning) {
+            ForegroundService.stop(this)
+        }
+        PanelClient.beat(this, true)
+        refreshRemoteInfo()
+    }
+
+    /** Texto da chave "Controle remoto" na aba Config (ligado/desligado e último comando). */
+    fun refreshRemoteInfo() {
+        runOnUiThread {
+            try {
+                val ligado = RemoteControl.isEnabled(this)
+                if (switchRemote.isChecked != ligado) setRemoteSwitchSilently(ligado)
+                val ultimo = RemoteControl.lastText(this)
+                val base = if (ligado) {
+                    "Ligado: o painel pode iniciar envios, pausar, continuar, finalizar, escanear e verificar. O app fica online " +
+                        "esperando comandos (notificação fixa) e mantém o processador acordado: deixe o celular carregando. " +
+                        "Para começar um envio a tela precisa estar ligada e sem PIN (ou já destravada)."
+                } else {
+                    "Desligado: o painel só acompanha o andamento. Ele não consegue iniciar, pausar nem finalizar nada neste celular."
+                }
+                tvRemoteInfo.text = base + (if (ultimo.isNotEmpty()) "\nÚltimo comando: $ultimo" else "")
+            } catch (e: Exception) { }
+        }
+    }
+
+    /** Chegou um comando do painel que espera esta tela: cumpre logo depois que a tela terminar de se montar. */
+    private fun drainRemote() {
+        if (!pendingRemote) return
+        pendingRemote = false
+        handler.postDelayed({ runRemoteQueue() }, 700L)
+    }
+
+    private fun runRemoteQueue() {
+        for (cmd in RemoteControl.takeQueue(this)) {
+            val id = cmd.optString("id")
+            val type = cmd.optString("type")
+            val erro: String? = try { remoteRun(cmd) } catch (e: Exception) { "erro no app: ${e.message}" }
+            RemoteControl.finish(this, id, type, erro, RemoteControl.okNote(type))
+        }
+    }
+
+    /** Executa um comando do painel. Devolve null se deu certo ou o motivo de não ter feito. */
+    private fun remoteRun(cmd: org.json.JSONObject): String? {
+        val params = cmd.optJSONObject("params") ?: org.json.JSONObject()
+        return when (cmd.optString("type")) {
+            "pause" -> remotePause()
+            "resume" -> remoteResume()
+            "scan" -> remoteScan(params)
+            "approvals" -> remoteApprovals(params)
+            "start" -> remoteStart(cmd, params)
+            else -> "comando desconhecido neste app"
+        }
+    }
+
+    /** Tela pronta para o app operar o WhatsApp? Acende a tela; com PIN/biometria bloqueando não há o que fazer. */
+    private fun remoteScreenProblem(): String? {
+        if (!ScreenGuard.isScreenOn(this)) ScreenGuard.wake(this, 30_000L)
+        if (ScreenGuard.isLocked(this) && ScreenGuard.isSecure(this)) {
+            return "tela bloqueada com PIN/biometria: destrave o celular (ou deixe a tela sempre acesa) e tente de novo"
+        }
+        return null
+    }
+
+    /** Painel: Finalizar. Devolve false se não havia nada em andamento. */
+    fun remoteFinalize(): Boolean {
+        if (!(isRunning || runActive || scanInProgress)) return false
+        stopRun("Finalizado pelo painel")
+        return true
+    }
+
+    /** Painel: Pausar. */
+    fun remotePause(): String? {
+        if (!(isRunning || runActive)) return "nada em andamento para pausar"
+        if (isPaused) return "já estava pausado"
+        pauseRunByUser("Pausado pelo painel")
+        return null
+    }
+
+    private fun remoteResume(): String? {
+        if (!(isRunning || runActive) || !isPaused) return "não estava pausado"
+        remoteScreenProblem()?.let { return it }
+        RunLog.add(this, "☁ Painel: retomando")
+        resumeAfterPause()
+        return null
+    }
+
+    private fun remoteScan(params: org.json.JSONObject): String? {
+        if (isRunning || runActive || scanInProgress) return "já há um processo em andamento neste celular"
+        if (GroupJoinerService.serviceInstance == null || !isAccessibilityEnabled()) return "serviço de acessibilidade desligado"
+        remoteScreenProblem()?.let { return it }
+        when (params.optString("wa", "both")) {
+            "normal" -> radioAutoNormal.isChecked = true
+            "business" -> radioAutoBusiness.isChecked = true
+            else -> radioAutoBoth.isChecked = true
+        }
+        startScan()
+        return null
+    }
+
+    private fun remoteApprovals(params: org.json.JSONObject): String? {
+        if (isRunning || runActive || scanInProgress) return "já há um processo em andamento neste celular"
+        if (GroupJoinerService.serviceInstance == null || !isAccessibilityEnabled()) return "serviço de acessibilidade desligado"
+        if (HistoryManager.pendingLinks.isEmpty()) return "nenhum pedido de entrada pendente para verificar"
+        remoteScreenProblem()?.let { return it }
+        selectedPackage = if (params.optString("wa", "normal") == "business") "com.whatsapp.w4b" else "com.whatsapp"
+        startApprovalCheck()
+        return null
+    }
+
+    /** Painel: Novo envio (a lista e a mensagem vêm no comando; o painel já pediu a confirmação). */
+    private fun remoteStart(cmd: org.json.JSONObject, params: org.json.JSONObject): String? {
+        if (isRunning || runActive || scanInProgress) return "já há um processo em andamento neste celular"
+        if (GroupJoinerService.serviceInstance == null || !isAccessibilityEnabled()) return "serviço de acessibilidade desligado"
+        val payload = cmd.optJSONObject("payload") ?: return "o comando veio sem a lista de grupos"
+        val arr = payload.optJSONArray("links") ?: return "o comando veio sem a lista de grupos"
+        val links = mutableListOf<String>()
+        for (i in 0 until arr.length()) {
+            val l = arr.optString(i).trim()
+            if (l.startsWith("http") && !links.contains(l)) links.add(l)
+        }
+        if (links.isEmpty()) return "a lista de grupos veio vazia"
+        val message = payload.optString("message", "").trim()
+        val entrar = params.optString("mode", "messages") == "join"
+        val business = params.optString("wa", "normal") == "business"
+        if (!entrar && message.isEmpty()) return "a mensagem veio vazia"
+        remoteScreenProblem()?.let { return it }
+
+        selectedPackage = if (business) "com.whatsapp.w4b" else "com.whatsapp"
+        if (business) radioBusiness.isChecked = true else radioNormal.isChecked = true
+        showTab("home")
+        RunLog.add(
+            this,
+            "☁ Painel: " + (if (entrar) "entrar em" else "enviar mensagem em") + " ${links.size} grupos pelo ${appName(selectedPackage)}"
+        )
+        if (entrar) {
+            editTextLinks.setText(links.joinToString("\n"))
+            updateLinkCount()
+            switchSendMessage.isChecked = message.isNotEmpty()
+            if (message.isNotEmpty()) etMessage.setText(message)
+            startProcessing()
+        } else {
+            editMsgLinks.setText(links.joinToString("\n"))
+            etMsgOnly.setText(message)
+            updateMsgLinkCount()
+            saveSavedSettings()
+            beginMessages(links, message)
+        }
+        return null
     }
 
     // =====================================================================
@@ -1169,13 +1357,13 @@ class MainActivity : AppCompatActivity() {
         chainRunnable?.let { handler.removeCallbacks(it) }
     }
 
-    private fun pauseRunByUser() {
+    private fun pauseRunByUser(reason: String = "Pausado por você") {
         isPaused = true
-        pauseReason = "Pausado por você"
+        pauseReason = reason
         cancelRunTimers()
         RunRuntime.step = "pausado"
         persistRun(stage, 24L * 3_600_000L)
-        RunLog.add(this, "⏸ Pausado por você")
+        RunLog.add(this, "⏸ $reason")
         showPausedUi("⏸ Pausado")
     }
 
@@ -1348,6 +1536,13 @@ class MainActivity : AppCompatActivity() {
         inc?.removeExtra(EXTRA_STATUS)
         inc?.removeExtra(EXTRA_SEQ)
         inc?.removeExtra(EXTRA_RECOVER)
+        // comando do painel online que precisa desta tela: acende a tela e cumpre depois que o resto desta função restaurar o estado
+        val remoto = inc?.getBooleanExtra(EXTRA_REMOTE, false) ?: false
+        inc?.removeExtra(EXTRA_REMOTE)
+        if (remoto) {
+            pendingRemote = true
+            showOverLockScreen()
+        }
         val scanDone = inc?.getBooleanExtra(EXTRA_SCAN_DONE, false) ?: false
         inc?.removeExtra(EXTRA_SCAN_DONE)
         if (scanDone) {
@@ -1706,6 +1901,11 @@ class MainActivity : AppCompatActivity() {
         scanQueue.clear()
         btnScan.isEnabled = true
         updateRunBanner()
+        if (estava) {
+            // resumo só com números (sem nomes de grupos) para o cartão do celular no painel
+            val lidas = scanResults().sumOf { it.second.rows.size }
+            PanelClient.setLastRun(this, "Escaneamento concluído · $lidas conversas · " + SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
+        }
         PanelClient.beat(this, true)   // painel online: escaneamento terminou
         if (!runActive) {
             wakeLock?.let { if (it.isHeld) it.release() }

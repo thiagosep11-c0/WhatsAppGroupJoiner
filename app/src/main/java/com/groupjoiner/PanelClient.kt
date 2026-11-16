@@ -16,9 +16,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Painel online (fase 1, só leitura): manda ao painel o "sinal de vida" deste celular — etapa, grupo, porcentagem, contagens,
- * bateria e as últimas linhas do Registro. Só fala HTTPS e só depois de parear com o código gerado no painel.
+ * Painel online: manda ao painel o "sinal de vida" deste celular — etapa, grupo, porcentagem, contagens, bateria, estado da
+ * tela e as últimas linhas do Registro. Só fala HTTPS e só depois de parear com o código gerado no painel.
  * Nunca manda links de grupos nem o texto das mensagens. Todo erro de rede é engolido: o painel nunca atrapalha os envios.
+ *
+ * Fase 2: a resposta do painel pode trazer comandos (ver RemoteControl); as respostas aos comandos e, quando o painel pede,
+ * o registro completo (sem links) vão no sinal seguinte.
  */
 object PanelClient {
     const val DEFAULT_URL = "https://ongroups-painel.pages.dev"
@@ -36,8 +39,25 @@ object PanelClient {
     @Volatile private var lastLogSent = ""
     @Volatile var lastOkAt = 0L
     @Volatile var lastError = ""
+    @Volatile private var pollSec = 15          // de quanto em quanto tempo o painel quer sinal (ele muda isto na resposta)
+    @Volatile private var wantFullLog = false   // o painel pediu o registro completo
+
+    private class Built(val json: String, val lastLog: String, val ackIds: List<String>, val fullLog: Boolean)
 
     private fun prefs(context: Context) = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** O painel pediu o registro completo: ele vai junto com o próximo sinal. */
+    fun requestFullLog() {
+        wantFullLog = true
+    }
+
+    /** Intervalo que o painel pediu entre um sinal e outro (entre 5 e 120 s). */
+    fun pollMs(): Long = pollSec.coerceIn(5, 120) * 1000L
+
+    /** Manda um sinal só se já passou o intervalo pedido pelo painel (usado pelo serviço enquanto espera comandos). */
+    fun beatIfDue(context: Context) {
+        if (System.currentTimeMillis() - lastSentAt >= pollMs()) beat(context)
+    }
 
     fun isPaired(context: Context): Boolean = prefs(context).getString(K_TOKEN, "").orEmpty().isNotEmpty()
 
@@ -53,6 +73,8 @@ object PanelClient {
     fun unpair(context: Context) {
         prefs(context).edit().remove(K_TOKEN).remove(K_NAME).apply()
         lastOkAt = 0L
+        RemoteControl.setEnabled(context, false)   // sem painel não há controle remoto (ao conectar de novo, liga de novo na Config)
+        MainActivity.instance?.refreshRemoteInfo()
     }
 
     /** Texto para a aba Config: conectado ou não, e o último problema (se houver). */
@@ -141,17 +163,20 @@ object PanelClient {
         // tudo (inclusive montar o sinal, que lê o Registro) roda fora da tela principal
         Thread {
             try {
-                val built: Pair<String, String>? = try { buildBeat(app) } catch (e: Exception) { null }
+                val built: Built? = try { buildBeat(app) } catch (e: Exception) { null }
                 if (built == null) {
                     lastError = "Não consegui montar o sinal."
                     return@Thread
                 }
-                val r = postJson(base + "/api/device/beat", built.first, token)
+                val r = postJson(base + "/api/device/beat", built.json, token)
                 when {
                     r.first in 200..299 -> {
                         lastOkAt = System.currentTimeMillis()
                         lastError = ""
-                        lastLogSent = built.second
+                        lastLogSent = built.lastLog
+                        RemoteControl.acksDelivered(app, built.ackIds)   // o painel já tem estas respostas
+                        if (built.fullLog) wantFullLog = false
+                        handleResponse(app, r.second)
                     }
                     r.first == 401 -> {
                         unpair(app)
@@ -170,6 +195,20 @@ object PanelClient {
             }
         }.start()
     }
+
+    /** Lê a resposta do painel: o intervalo pedido e os comandos (se houver). */
+    private fun handleResponse(app: Context, text: String) {
+        try {
+            val j = JSONObject(text)
+            pollSec = j.optInt("pollSec", 15).coerceIn(5, 120)
+            val cmds = j.optJSONArray("commands")
+            if (cmds != null && cmds.length() > 0) RemoteControl.onCommands(app, cmds)
+        } catch (e: Exception) { }
+    }
+
+    /** Defesa extra: nenhuma linha do registro sai daqui com link de grupo ou de outro site. */
+    private fun cleanLine(s: String): String =
+        s.replace(Regex("""https?://\S+"""), "[link]").replace(Regex("""chat\.whatsapp\.com/\S*"""), "[link]")
 
     private fun postJson(address: String, body: String, token: String?): Pair<Int, String> {
         val c = URL(address).openConnection() as HttpURLConnection
@@ -207,8 +246,8 @@ object PanelClient {
         "?"
     }
 
-    /** Monta o sinal (JSON) e devolve também a última linha do Registro enviada (para só mandar o registro quando ele mudar). */
-    private fun buildBeat(ctx: Context): Pair<String, String> {
+    /** Monta o sinal (JSON); devolve também a última linha do Registro enviada (para só mandar o registro quando ele mudar). */
+    private fun buildBeat(ctx: Context): Built {
         val now = System.currentTimeMillis()
         val o = JSONObject()
         val snap = StorageManager.loadRun(ctx)?.takeIf { it.active }
@@ -262,13 +301,31 @@ object PanelClient {
                 .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
         )
         o.put("screenOn", ScreenGuard.isScreenOn(ctx))
+        // tela: o app só opera o WhatsApp com a tela ligada e desbloqueada (PIN/biometria o app não destrava sozinho)
+        o.put(
+            "screen",
+            JSONObject()
+                .put("on", ScreenGuard.isScreenOn(ctx))
+                .put("locked", ScreenGuard.isLocked(ctx))
+                .put("secure", ScreenGuard.isSecure(ctx))
+        )
         o.put("accessibility", GroupJoinerService.serviceInstance != null)
+        o.put("remote", JSONObject().put("supported", true).put("enabled", RemoteControl.isEnabled(ctx)))
         o.put("model", modelName())
         o.put("appVersion", appVersion(ctx))
 
+        // respostas dos comandos que o painel mandou e ainda não recebeu
+        val acks = RemoteControl.pendingAcks(ctx)
+        val ackIds = mutableListOf<String>()
+        for (i in 0 until acks.length()) ackIds.add(acks.getJSONObject(i).optString("id"))
+        if (acks.length() > 0) o.put("acks", acks)
+
         val lines = RunLog.lines(ctx, 15)
         val ultima = lines.lastOrNull() ?: ""
-        if (ultima != lastLogSent) o.put("log", JSONArray(lines))
-        return Pair(o.toString(), ultima)
+        if (ultima != lastLogSent) o.put("log", JSONArray(lines.map { cleanLine(it) }))
+        // o painel pediu o registro completo
+        val queroLog = wantFullLog
+        if (queroLog) o.put("fullLog", JSONArray(RunLog.lines(ctx, 200).map { cleanLine(it) }))
+        return Built(o.toString(), ultima, ackIds, queroLog)
     }
 }

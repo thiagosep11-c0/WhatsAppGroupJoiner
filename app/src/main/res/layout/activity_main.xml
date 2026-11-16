@@ -605,7 +605,20 @@
                     android:textColor="#FFFFFF" android:textSize="12sp"/>
             </LinearLayout>
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                android:text="No painel online toque em Adicionar celular, escreva aqui o código que ele mostrar e toque em Conectar. O painel recebe só o andamento (etapa, grupo, porcentagem, contagens, bateria e as últimas linhas do Registro), nunca os links dos grupos nem o texto das mensagens."
+                android:text="No painel online toque em Adicionar celular, escreva aqui o código que ele mostrar e toque em Conectar. O painel recebe o andamento (etapa, grupo, porcentagem, contagens, bateria, estado da tela e as últimas linhas do Registro); com o Controle remoto ligado ele também manda a lista de grupos e a mensagem de um Novo envio para este celular."
+                android:textSize="11sp" android:textColor="#666666" android:layout_marginBottom="12dp"/>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical"
+                android:layout_marginBottom="4dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content"
+                    android:layout_weight="1" android:text="🎮 Controle remoto pelo painel"
+                    android:textSize="14sp" android:textStyle="bold" android:textColor="#333333"/>
+                <Switch android:id="@+id/switchRemote" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"/>
+            </LinearLayout>
+            <TextView android:id="@+id/tvRemoteInfo" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Desligado."
                 android:textSize="11sp" android:textColor="#666666" android:layout_marginBottom="16dp"/>
 
             <View android:layout_width="match_parent" android:layout_height="1dp"
