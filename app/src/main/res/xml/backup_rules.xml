@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 e anterior: o token do painel online (uma credencial) não vai para o backup do Google -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="panel_prefs.xml" />
+</full-backup-content>

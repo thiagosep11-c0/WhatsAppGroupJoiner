@@ -50,6 +50,7 @@ class GroupJoinerService : AccessibilityService() {
         if (waiting) {
             activeSeq = RunRuntime.groupSeq
             RunRuntime.mentionNote = ""   // grupo novo: a marcação @todos começa do zero
+            RunRuntime.step = "esperando o WhatsApp abrir o grupo"
             mentionTried = false
             scheduleCheck(5000L, 1)
             timeoutRunnable = Runnable {
@@ -174,6 +175,7 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun exitAndReturn(status: String) {
+        setStep("saindo do WhatsApp")
         isActive = false
         cancelAll()
         // um instante para o que acabou de ser tocado (Enviar, Entrar...) terminar antes de sair
@@ -208,6 +210,7 @@ class GroupJoinerService : AccessibilityService() {
         if (hasReturned) return
         hasReturned = true
         isActive = false
+        setStep("voltando ao app")
         val seq = activeSeq
         // o resultado também vai dentro do Intent: se a tela do app tiver sido fechada pelo sistema,
         // a nova tela recebe o resultado e o processo continua
@@ -427,7 +430,15 @@ class GroupJoinerService : AccessibilityService() {
     private fun dBeforeSend(): Long = if (humanTyping) HumanTyping.beforeSendPauseMs() else 400L
     private fun dStay(): Long = if (humanTyping) HumanTyping.stayAfterSendMs() else 1_500L
 
+    // Diz ao painel online o que o app está fazendo agora (o sinal sai logo, respeitando o intervalo mínimo)
+    private fun setStep(text: String) {
+        if (RunRuntime.step == text) return
+        RunRuntime.step = text
+        PanelClient.beat(applicationContext)
+    }
+
     private fun startHumanTyping() {
+        setStep("lendo o grupo")
         val words = HumanTyping.splitWords(messageToSend)
         mentionTried = false
         mentionInvolved = false
@@ -492,6 +503,7 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun typingFocus(words: List<String>) {
+        setStep("tocando no campo de mensagem")
         val ok = withInputField { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
         if (!ok) { safeFinish("retry_env"); return }
         scheduleTyping(dFocus() + dWord(words[0])) {
@@ -508,6 +520,7 @@ class GroupJoinerService : AccessibilityService() {
         }
         if (!humanTyping) {
             // sem digitação humana: escreve de uma vez tudo o que vem até a marcação @todos (ou até o fim)
+            setStep("escrevendo a mensagem")
             var end = index
             val sb = StringBuilder(typed)
             while (end < words.size && !(!mentionTried && isMentionWord(words[end]))) {
@@ -521,6 +534,7 @@ class GroupJoinerService : AccessibilityService() {
             else scheduleTyping(dBeforeSend()) { typingSend(1) }
             return
         }
+        setStep("digitando a palavra ${index + 1} de ${words.size}")
         val text = typed + words[index]
         val ok = withInputField { setInputText(it, text) }
         if (!ok) { clearDraftAndFinish(); return }
@@ -560,6 +574,7 @@ class GroupJoinerService : AccessibilityService() {
     private fun showingHint(input: AccessibilityNodeInfo): Boolean = Build.VERSION.SDK_INT >= 26 && input.isShowingHintText
 
     private fun typingSend(attempt: Int) {
+        setStep("conferindo o texto antes de enviar")
         var cur = ""
         var hint = false
         val found = withInputField { input ->
@@ -590,6 +605,7 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun typingSendClick(n: Int) {
+        setStep("tocando em Enviar")
         val root = rootInActiveWindow
         var botao: AccessibilityNodeInfo? = null
         var tocou = false
@@ -617,6 +633,7 @@ class GroupJoinerService : AccessibilityService() {
 
     // Depois do toque em Enviar: o campo esvaziou? (esvaziou = a mensagem saiu)
     private fun typingSendCheck(n: Int, checks: Int) {
+        setStep("conferindo que a mensagem saiu")
         var ainda = false
         val found = withInputField { input ->
             ainda = !showingHint(input) && matchesExpected(input.text?.toString() ?: "")
@@ -660,6 +677,8 @@ class GroupJoinerService : AccessibilityService() {
     private fun typingMention(words: List<String>, index: Int, typed: String) {
         mentionTried = true
         mentionTouched = false
+        RunRuntime.mentionTotal++
+        setStep("digitando @todos")
         typingMentionLetter(words, index, typed, words[index].trim(), 1)
     }
 
@@ -676,6 +695,7 @@ class GroupJoinerService : AccessibilityService() {
 
     // Procura a opção "Todos" na lista e toca nela; na volta confere se a lista sumiu (= a marcação entrou)
     private fun typingMentionPick(words: List<String>, index: Int, typed: String, attempt: Int, clicked: Boolean) {
+        if (attempt == 1 && !clicked) setStep("esperando a opção Todos aparecer")
         val roots = mentionRoots()
         var found: AccessibilityNodeInfo? = null
         for (r in roots) {
@@ -696,6 +716,7 @@ class GroupJoinerService : AccessibilityService() {
             typingMentionGiveUp(words, index, typed, why, roots)
             return
         }
+        setStep("tocando na opção Todos")
         val tocou = clickWithAncestors(option)
         if (tocou) mentionTouched = true
         RunLog.add(applicationContext, "👆 Toquei na opção Todos (${describeNode(option)}), tentativa $attempt: ${if (tocou) "tocou" else "não deu para tocar"}")
@@ -706,6 +727,7 @@ class GroupJoinerService : AccessibilityService() {
     private fun typingMentionDone(words: List<String>, index: Int) {
         RunRuntime.mentionNote = "marcou @todos"
         mentionInvolved = true   // o WhatsApp mostra a marcação do jeito dele: a conferência olha só o que vem antes e depois
+        RunRuntime.mentionOk++
         val next = index + 1
         if (next < words.size) {
             // a quebra de linha que vinha depois do @todos não sobrevive à marcação: devolve na primeira palavra seguinte
@@ -740,6 +762,7 @@ class GroupJoinerService : AccessibilityService() {
 
     // Depois da marcação: cola a próxima palavra no fim do campo (reescrever o texto inteiro apagaria a marcação)
     private fun typingPaste(words: List<String>, index: Int) {
+        setStep("escrevendo o resto da mensagem")
         val piece = words[index]
         var before = ""
         var glue = ""

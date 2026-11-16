@@ -53,6 +53,10 @@ object RunRuntime {
     @Volatile var leftChatOk: Boolean = true   // false = não deu para confirmar que saímos do chat anterior (o próximo grupo não escreve às cegas)
     @Volatile var mentionNote: String = ""     // o que aconteceu com a marcação @todos no grupo atual (vai para o registro)
     @Volatile var mentionDumps: Int = 0        // quantos diagnósticos da marcação já foram gravados nesta sessão (máx. 3)
+    @Volatile var mentionOk: Int = 0           // marcações @todos que deram certo nesta rodada (vai para o painel online)
+    @Volatile var mentionTotal: Int = 0        // grupos em que a marcação @todos foi tentada nesta rodada
+    @Volatile var step: String = ""            // o que o app está fazendo agora (aparece no painel online)
+    @Volatile var scanning: Boolean = false    // escaneamento das conversas em andamento
     @Volatile var groupSeq: Long = 0L
     @Volatile var groupDone: Boolean = true
 }

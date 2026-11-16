@@ -129,6 +129,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etCooldownHours: EditText
     private lateinit var btnBattery: Button
     private lateinit var btnAppSettings: Button
+    private lateinit var tvPanelStatus: TextView
+    private lateinit var etPanelUrl: EditText
+    private lateinit var etPanelCode: EditText
+    private lateinit var btnPanelPair: Button
+    private lateinit var btnPanelTest: Button
+    private lateinit var btnPanelUnpair: Button
 
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
@@ -216,6 +222,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         isForeground = true
+        PanelClient.beat(this, true)   // painel online: o app abriu
         ForegroundService.clearAlert(this)   // o app voltou para a frente: avisos como "ficou em segundo plano" já não valem
         if (!runActive) renderIdleStatus()
         updateRunBanner()
@@ -328,6 +335,12 @@ class MainActivity : AppCompatActivity() {
         etCooldownHours = findViewById(R.id.etCooldownHours)
         btnBattery = findViewById(R.id.btnBattery)
         btnAppSettings = findViewById(R.id.btnAppSettings)
+        tvPanelStatus = findViewById(R.id.tvPanelStatus)
+        etPanelUrl = findViewById(R.id.etPanelUrl)
+        etPanelCode = findViewById(R.id.etPanelCode)
+        btnPanelPair = findViewById(R.id.btnPanelPair)
+        btnPanelTest = findViewById(R.id.btnPanelTest)
+        btnPanelUnpair = findViewById(R.id.btnPanelUnpair)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -530,6 +543,54 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "Não consegui abrir as configurações do app.", Toast.LENGTH_SHORT).show()
             }
         }
+
+        // Painel online: parear com o código, mandar um sinal de teste, desconectar
+        btnPanelPair.setOnClickListener {
+            btnPanelPair.isEnabled = false
+            tvPanelStatus.text = "Conectando..."
+            PanelClient.pair(this, etPanelUrl.text.toString(), etPanelCode.text.toString()) { ok, msg ->
+                btnPanelPair.isEnabled = true
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                if (ok) {
+                    etPanelCode.setText("")
+                    RunLog.add(this, "☁ $msg")
+                    PanelClient.beat(this, true)
+                }
+                refreshPanelStatus()
+            }
+        }
+        btnPanelTest.setOnClickListener {
+            if (!PanelClient.isPaired(this)) {
+                Toast.makeText(this, "Conecte primeiro com o código do painel.", Toast.LENGTH_SHORT).show()
+            } else {
+                PanelClient.beat(this, true)
+                tvPanelStatus.text = "Enviando sinal..."
+                handler.postDelayed({ refreshPanelStatus() }, 2500L)
+            }
+        }
+        btnPanelUnpair.setOnClickListener {
+            if (!PanelClient.isPaired(this)) {
+                Toast.makeText(this, "Este celular não está conectado.", Toast.LENGTH_SHORT).show()
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle("Desconectar do painel?")
+                    .setMessage(
+                        "O painel deixa de receber o progresso deste celular. O cartão dele continua no painel até você removê-lo lá. " +
+                            "Para voltar, gere um código novo no painel."
+                    )
+                    .setPositiveButton("Desconectar") { _, _ ->
+                        PanelClient.unpair(this)
+                        refreshPanelStatus()
+                    }
+                    .setNegativeButton("Voltar", null)
+                    .show()
+            }
+        }
+    }
+
+    /** Mostra na aba Config se este celular está conectado ao painel online e como foi o último sinal. */
+    private fun refreshPanelStatus() {
+        runOnUiThread { tvPanelStatus.text = PanelClient.statusText(this) }
     }
 
     // =====================================================================
@@ -621,6 +682,9 @@ class MainActivity : AppCompatActivity() {
         isRunning = true
         isPaused = false
         RunRuntime.leftChatOk = true   // processo novo: nenhum chat anterior em dúvida
+        RunRuntime.mentionOk = 0       // contadores da marcação @todos desta rodada (painel online)
+        RunRuntime.mentionTotal = 0
+        RunRuntime.step = "começando"
         runStartedAt = System.currentTimeMillis()
         attempt = 1
         envFailures = 0
@@ -724,6 +788,7 @@ class MainActivity : AppCompatActivity() {
         RunRuntime.currentPkg = selectedPackage
         RunRuntime.groupSeq = System.currentTimeMillis()
         RunRuntime.groupDone = false
+        RunRuntime.step = "abrindo o grupo ${currentIndex + 1}"
         persistRun("GROUP", groupBudgetMs())
         RunLog.add(
             this,
@@ -785,6 +850,7 @@ class MainActivity : AppCompatActivity() {
                 "${Phase.label(phase)} ${minOf(currentIndex + 1, linkList.size)}/${linkList.size}: $pauseReason"
             )
         }
+        RunRuntime.step = "esperando a tela ($motivo)"
         persistRun("WAIT", 120_000L)
         runOnUiThread { tvCountdown.text = "🔒 $motivo — aguardando" }
         screenWaitRunnable?.let { handler.removeCallbacks(it) }
@@ -861,6 +927,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishRun(joined: Int, waiting: Int, failed: Int, msgSent: Int) {
         val fase = phase
+        PanelClient.setLastRun(this, runSummaryText("Concluída"))
+        RunRuntime.step = ""
         runActive = false
         isRunning = false
         isPaused = false
@@ -880,6 +948,7 @@ class MainActivity : AppCompatActivity() {
         RunLog.add(this, "✔ Concluído (${Phase.label(fase)}): ✅$joined entraram, 💬$msgSent mensagens, ⏳$waiting aguardando, ❌$failed falhas")
         renderIdleStatus()
         updateRunBanner()
+        PanelClient.beat(this, true)   // painel online: rodada concluída (o celular passa a ocioso com o resumo)
         if (switchNotifications.isChecked) {
             if (fase == Phase.MESSAGES) sendFinishedNotification("💬 $msgSent mensagens enviadas  ❌ $failed falharam")
             else sendFinishedNotification("✅ $joined entrou  ⏳ $waiting aguardando  ❌ $failed falhou")
@@ -958,6 +1027,7 @@ class MainActivity : AppCompatActivity() {
                 this,
                 "↻ ${Phase.label(phase)} $n/${linkList.size}: $motivo (${ScreenGuard.describe(this)}). Tentativa $attempt/$MAX_ATTEMPTS em 8 s"
             )
+            RunRuntime.step = "tentando de novo ($attempt/$MAX_ATTEMPTS) em 8 s"
             persistRun("WAIT", 8_000L + 60_000L)
             runOnUiThread { tvCountdown.text = "↻ Tentando de novo ($attempt/$MAX_ATTEMPTS)" }
             startCountdown(8_000L, currentIndex) { openNextLink() }
@@ -987,6 +1057,7 @@ class MainActivity : AppCompatActivity() {
         }
         val nextIdx = currentIndex + 1
         currentIndex++
+        RunRuntime.step = "pausa de ${delay / 1000} s antes do próximo grupo"
         persistRun("WAIT", delay + 60_000L)
         runOnUiThread {
             progressBar.progress = currentIndex
@@ -1059,6 +1130,25 @@ class MainActivity : AppCompatActivity() {
         ForegroundService.updateStatus(this, linha + " · " + timeNow())
         tvRunStatus.text = linha + "  ·  " + timeNow()
         tvRunStatus.setTextColor(Color.parseColor(if (pauseReason.isNotEmpty()) "#B71C1C" else "#455A64"))
+        PanelClient.beat(this) // painel online: a cada passo do processo (no máximo um sinal a cada 6 s)
+    }
+
+    /** Resumo de uma linha da rodada (vai para o painel online e fica no cartão do celular quando ele fica ocioso). */
+    private fun runSummaryText(prefix: String): String {
+        val total = linkItems.size
+        if (total == 0) return prefix
+        val ok = linkItems.count { it.status == "joined" || it.status == "message_sent" || it.status == "already_member" }
+        val wait = linkItems.count { it.status == "requested" }
+        val bad = linkItems.count { it.status == "invalid" || it.status == "error_env" || it.status == "admin_only" }
+        val skipped = linkItems.count { it.status == "skipped_recent" }
+        val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        val okTxt = when (phase) {
+            Phase.MESSAGES -> "$ok enviadas"
+            Phase.APPROVAL -> "$ok aprovados"
+            else -> "$ok entraram"
+        }
+        val extra = (if (wait > 0) " · $wait aguardando" else "") + " · $bad falhas" + (if (skipped > 0) " · $skipped puladas" else "")
+        return "$prefix · ${Phase.label(phase)} · $total grupos · $okTxt$extra · $hora"
     }
 
     private fun showPausedUi(text: String) {
@@ -1083,6 +1173,7 @@ class MainActivity : AppCompatActivity() {
         isPaused = true
         pauseReason = "Pausado por você"
         cancelRunTimers()
+        RunRuntime.step = "pausado"
         persistRun(stage, 24L * 3_600_000L)
         RunLog.add(this, "⏸ Pausado por você")
         showPausedUi("⏸ Pausado")
@@ -1093,6 +1184,7 @@ class MainActivity : AppCompatActivity() {
         isPaused = true
         pauseReason = reason
         cancelRunTimers()
+        RunRuntime.step = "pausado"
         persistRun("WAIT", 24L * 3_600_000L)
         RunLog.add(this, "⏸ Pausado: $reason")
         ForegroundService.alert(
@@ -1109,6 +1201,7 @@ class MainActivity : AppCompatActivity() {
         envFailures = 0
         ForegroundService.clearAlert(this)
         clearPauseUi()
+        RunRuntime.step = "retomando"
         RunLog.add(this, "▶ Retomado")
         if (stage == "GROUP" && !RunRuntime.groupDone) {
             // o grupo em andamento ainda vai responder
@@ -1124,6 +1217,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun stopRun(reason: String) {
         cancelRunTimers()
+        // painel online: guarda o resumo da rodada que está sendo finalizada (só se havia uma)
+        if (runActive || isRunning) PanelClient.setLastRun(this, runSummaryText("Finalizada"))
+        RunRuntime.step = ""
+        RunRuntime.scanning = false
         // escaneamento em andamento: cancela também (o serviço derruba tudo o que estava agendado)
         val estavaEscaneando = scanInProgress
         if (scanInProgress) {
@@ -1168,6 +1265,7 @@ class MainActivity : AppCompatActivity() {
         renderIdleStatus()
         if (estavaEscaneando) renderScan()
         updateRunBanner()
+        PanelClient.beat(this, true)   // painel online: processo finalizado
     }
 
     /** Chamado pelo botão "Finalizar" da notificação. */
@@ -1549,9 +1647,12 @@ class MainActivity : AppCompatActivity() {
         scanQueue.addAll(quais)
         scanSkipNote = ""
         scanInProgress = true
+        RunRuntime.scanning = true
+        RunRuntime.step = "lendo a lista de conversas"
         btnScan.isEnabled = false
         acquireScreenLock()
         RunLog.add(this, "🔍 Escaneamento iniciado: " + quais.joinToString(" + ") { appName(it) })
+        PanelClient.beat(this, true)   // painel online: escaneando
         scanNext()
     }
 
@@ -1600,9 +1701,12 @@ class MainActivity : AppCompatActivity() {
         scanSafetyRunnable = null
         val estava = scanInProgress
         scanInProgress = false
+        RunRuntime.scanning = false
+        if (!runActive) RunRuntime.step = ""
         scanQueue.clear()
         btnScan.isEnabled = true
         updateRunBanner()
+        PanelClient.beat(this, true)   // painel online: escaneamento terminou
         if (!runActive) {
             wakeLock?.let { if (it.isHeld) it.release() }
             wakeLock = null
@@ -1686,6 +1790,7 @@ class MainActivity : AppCompatActivity() {
         // qual WhatsApp estava escolhido (normal ou Business) fica lembrado
         if (StorageManager.getPref(this, "wa_app") == "business") radioBusiness.isChecked = true else radioNormal.isChecked = true
         etMaxUnread.setText(StorageManager.getPref(this, "max_unread", "0"))
+        etPanelUrl.setText(PanelClient.url(this))
         when (StorageManager.getPref(this, "auto_app", "both")) {
             "normal" -> radioAutoNormal.isChecked = true
             "business" -> radioAutoBusiness.isChecked = true
@@ -1767,6 +1872,7 @@ class MainActivity : AppCompatActivity() {
         if (tab == "messages") updateMsgLinkCount()
         if (tab == "auto") renderScan()
         if (tab == "history") updateHistoryCount()
+        if (tab == "settings") refreshPanelStatus()
     }
 
     private fun applyTheme(dark: Boolean) {

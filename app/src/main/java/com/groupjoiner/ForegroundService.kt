@@ -228,6 +228,7 @@ class ForegroundService : Service() {
     }
 
     private fun watchdogTick() {
+        PanelClient.beat(this) // painel online: sinal de vida a cada 15 s enquanto o processo roda
         val snap = StorageManager.loadRun(this)
         if (snap == null || !snap.active) {
             holdLocks(screen = false, cpu = false)
