@@ -26,8 +26,11 @@ android {
         applicationId "com.groupjoiner"
         minSdk 21
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        // Número do build: no CI vem do número da execução do workflow (sempre cresce, então o Android nunca recusa uma
+        // atualização por "versão menor" e o app sabe se há algo mais novo). Fora do CI continua 1.
+        def numeroBuild = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+        versionCode numeroBuild
+        versionName "1.0.${numeroBuild}"
     }
 
     buildTypes {

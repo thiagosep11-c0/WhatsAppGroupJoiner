@@ -61,6 +61,12 @@ object PanelClient {
 
     fun isPaired(context: Context): Boolean = prefs(context).getString(K_TOKEN, "").orEmpty().isNotEmpty()
 
+    /** Cabeçalho de autorização deste celular (para baixar a atualização do app do painel); null se não está conectado. */
+    fun authHeader(context: Context): String? {
+        val t = prefs(context).getString(K_TOKEN, "").orEmpty()
+        return if (t.isEmpty()) null else "Bearer $t"
+    }
+
     fun url(context: Context): String = prefs(context).getString(K_URL, DEFAULT_URL).orEmpty().ifEmpty { DEFAULT_URL }
 
     fun name(context: Context): String = prefs(context).getString(K_NAME, "").orEmpty()
@@ -201,6 +207,7 @@ object PanelClient {
         try {
             val j = JSONObject(text)
             pollSec = j.optInt("pollSec", 15).coerceIn(5, 120)
+            AppUpdater.onHint(app, j.optJSONObject("update"))   // oferta de atualização do app (ou nada, se já está na versão mais nova)
             val cmds = j.optJSONArray("commands")
             if (cmds != null && cmds.length() > 0) RemoteControl.onCommands(app, cmds)
         } catch (e: Exception) { }
@@ -313,6 +320,7 @@ object PanelClient {
         o.put("remote", JSONObject().put("supported", true).put("enabled", RemoteControl.isEnabled(ctx)))
         o.put("model", modelName())
         o.put("appVersion", appVersion(ctx))
+        o.put("build", AppUpdater.installedBuild(ctx))   // número do build instalado: o painel diz se há um mais novo
 
         // respostas dos comandos que o painel mandou e ainda não recebeu
         val acks = RemoteControl.pendingAcks(ctx)

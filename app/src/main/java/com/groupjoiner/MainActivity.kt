@@ -137,6 +137,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnPanelUnpair: Button
     private lateinit var switchRemote: Switch
     private lateinit var tvRemoteInfo: TextView
+    private lateinit var tvUpdateInfo: TextView
+    private lateinit var btnUpdateCheck: Button
+    private lateinit var btnUpdateNow: Button
+    private lateinit var btnUpdatePerm: Button
     private var pendingRemote = false   // chegou um comando do painel que espera esta tela abrir
     private val remoteSwitchListener = CompoundButton.OnCheckedChangeListener { _, checked -> onRemoteSwitch(checked) }
 
@@ -236,6 +240,7 @@ class MainActivity : AppCompatActivity() {
         // controle remoto ligado: garante que o serviço está online esperando comandos (ex.: depois de uma atualização do app)
         if (RemoteControl.keepAlive(this) && !ForegroundService.isRunning) ForegroundService.start(this)
         refreshRemoteInfo()
+        refreshUpdateInfo()
     }
 
     override fun onPause() {
@@ -353,6 +358,10 @@ class MainActivity : AppCompatActivity() {
         btnPanelUnpair = findViewById(R.id.btnPanelUnpair)
         switchRemote = findViewById(R.id.switchRemote)
         tvRemoteInfo = findViewById(R.id.tvRemoteInfo)
+        tvUpdateInfo = findViewById(R.id.tvUpdateInfo)
+        btnUpdateCheck = findViewById(R.id.btnUpdateCheck)
+        btnUpdateNow = findViewById(R.id.btnUpdateNow)
+        btnUpdatePerm = findViewById(R.id.btnUpdatePerm)
 
         linkAdapter = LinkAdapter(linkItems)
         recyclerLinks.layoutManager = LinearLayoutManager(this)
@@ -603,6 +612,35 @@ class MainActivity : AppCompatActivity() {
         switchRemote.isChecked = RemoteControl.isEnabled(this)
         switchRemote.setOnCheckedChangeListener(remoteSwitchListener)
         refreshRemoteInfo()
+
+        // Atualização do app (vem do painel): verificar agora e atualizar
+        btnUpdateCheck.setOnClickListener {
+            if (!PanelClient.isPaired(this)) {
+                Toast.makeText(this, "Conecte este celular ao painel primeiro (código acima).", Toast.LENGTH_LONG).show()
+            } else {
+                PanelClient.beat(this, true)
+                tvUpdateInfo.text = "Verificando com o painel..."
+                handler.postDelayed({ refreshUpdateInfo() }, 2500L)
+            }
+        }
+        btnUpdatePerm.setOnClickListener { AppUpdater.openInstallSettings(this) }
+        btnUpdateNow.setOnClickListener {
+            val erro = AppUpdater.start(this, false)
+            if (erro != null) Toast.makeText(this, erro, Toast.LENGTH_LONG).show()
+            refreshUpdateInfo()
+        }
+        refreshUpdateInfo()
+    }
+
+    /** Texto do bloco "Atualização do app" na aba Config (versão instalada, oferta do painel e andamento). */
+    fun refreshUpdateInfo() {
+        runOnUiThread {
+            try {
+                tvUpdateInfo.text = AppUpdater.describe(this)
+                btnUpdateNow.isEnabled = AppUpdater.available(this) != null
+                btnUpdatePerm.visibility = if (AppUpdater.installAllowed(this)) View.GONE else View.VISIBLE
+            } catch (e: Exception) { }
+        }
     }
 
     /** Mostra na aba Config se este celular está conectado ao painel online e como foi o último sinal. */

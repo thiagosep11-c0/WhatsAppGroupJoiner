@@ -624,6 +624,33 @@
             <View android:layout_width="match_parent" android:layout_height="1dp"
                 android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
 
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="⬆ Atualização do app" android:textSize="14sp" android:textStyle="bold"
+                android:textColor="#333333" android:layout_marginBottom="6dp"/>
+            <TextView android:id="@+id/tvUpdateInfo" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="Versão instalada..."
+                android:textSize="12sp" android:textColor="#455A64" android:background="#ECEFF1"
+                android:padding="8dp" android:layout_marginBottom="8dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginBottom="4dp">
+                <Button android:id="@+id/btnUpdateCheck" android:layout_width="0dp" android:layout_height="44dp"
+                    android:layout_weight="1" android:text="Verificar" android:backgroundTint="#1565C0"
+                    android:textColor="#FFFFFF" android:textSize="12sp" android:layout_marginEnd="4dp"/>
+                <Button android:id="@+id/btnUpdateNow" android:layout_width="0dp" android:layout_height="44dp"
+                    android:layout_weight="2" android:text="⬆ Atualizar agora" android:backgroundTint="#075E54"
+                    android:textColor="#FFFFFF" android:textSize="12sp"/>
+            </LinearLayout>
+            <Button android:id="@+id/btnUpdatePerm" android:layout_width="match_parent" android:layout_height="44dp"
+                android:text="🔓 Liberar instalação de atualizações" android:backgroundTint="#E65100"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:layout_marginBottom="4dp"
+                android:visibility="gone"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="A atualização vem do painel online: o app baixa, confere e o Android pede um toque em Atualizar. Na primeira vez libere Instalar apps desconhecidos para o On Groups. Só atualiza com nenhum processo rodando (a atualização reinicia o app)."
+                android:textSize="11sp" android:textColor="#666666" android:layout_marginBottom="16dp"/>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp"
+                android:background="#E0E0E0" android:layout_marginBottom="16dp"/>
+
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:orientation="horizontal" android:gravity="center_vertical"
                 android:layout_marginBottom="12dp">

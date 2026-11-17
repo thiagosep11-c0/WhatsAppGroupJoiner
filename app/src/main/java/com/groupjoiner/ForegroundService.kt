@@ -135,6 +135,23 @@ class ForegroundService : Service() {
             try { NotificationManagerCompat.from(context).cancel(ALERT_ID) } catch (e: Exception) { }
         }
 
+        /** Aviso (com som) cujo toque abre [pending]: usado pela atualização do app. Tem número próprio para não cobrir outros avisos. */
+        fun alertWithIntent(context: Context, id: Int, title: String, text: String, pending: PendingIntent) {
+            try {
+                ensureChannels(context)
+                val n = NotificationCompat.Builder(context, ALERT_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_dialog_info)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                    .setContentIntent(pending)
+                    .setAutoCancel(true)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .build()
+                NotificationManagerCompat.from(context).notify(id, n)
+            } catch (e: Exception) { }
+        }
+
         fun hora(ms: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ms))
 
         private fun pendingFlags(): Int =

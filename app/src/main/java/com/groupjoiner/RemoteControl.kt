@@ -52,6 +52,7 @@ object RemoteControl {
         "approvals" -> "Verificar aprovados"
         "start" -> "Novo envio"
         "log" -> "Pedir registro"
+        "update" -> "Atualizar app"
         else -> type
     }
 
@@ -63,6 +64,7 @@ object RemoteControl {
         "approvals" -> "verificação iniciada"
         "start" -> "envio iniciado"
         "log" -> "registro enviado"
+        "update" -> "baixando a atualização; confirme a instalação na tela do celular"
         else -> "feito"
     }
 
@@ -221,6 +223,7 @@ object RemoteControl {
                 finish(ctx, id, type, null, okNote(type))
             }
             "finalize" -> finalizeNow(ctx, id, type)
+            "update" -> finish(ctx, id, type, AppUpdater.start(ctx, true), okNote(type))   // baixa e entrega ao instalador do Android
             "pause", "resume", "start", "scan", "approvals" -> viaApp(ctx, cmd)
             else -> finish(ctx, id, type, "comando desconhecido neste app", "")
         }
