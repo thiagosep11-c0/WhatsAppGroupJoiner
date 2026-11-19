@@ -303,6 +303,43 @@
                 android:text="💡 Para marcar todo mundo, escreva @todos sozinho (com espaço antes e depois, ou no fim da mensagem). O app digita @todos e toca na opção Todos que o WhatsApp mostra. Só aparece em grupos de até 32 participantes; nos maiores a mensagem sai sem a marcação."
                 android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="12dp"/>
 
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="📷 Foto antes do texto (opcional)" android:textSize="13sp" android:textStyle="bold"
+                android:textColor="#333333" android:layout_marginBottom="4dp"/>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:gravity="center_vertical" android:layout_marginBottom="4dp">
+                <TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Enviar foto antes do texto" android:textSize="13sp" android:textColor="#333333"/>
+                <Switch android:id="@+id/switchPhotos" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:checked="false"/>
+            </LinearLayout>
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:orientation="horizontal" android:layout_marginBottom="6dp">
+                <Button android:id="@+id/btnPhotoPick" android:layout_width="0dp" android:layout_height="42dp"
+                    android:layout_weight="1" android:text="🖼 Escolher fotos" android:backgroundTint="#1565C0"
+                    android:textColor="#FFFFFF" android:textSize="12sp" android:layout_marginEnd="4dp"/>
+                <Button android:id="@+id/btnPhotoClear" android:layout_width="0dp" android:layout_height="42dp"
+                    android:layout_weight="1" android:text="🗑 Limpar fotos" android:backgroundTint="#F44336"
+                    android:textColor="#FFFFFF" android:textSize="12sp"/>
+            </LinearLayout>
+            <HorizontalScrollView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:layout_marginBottom="6dp">
+                <LinearLayout android:id="@+id/photoStrip" android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" android:orientation="horizontal"/>
+            </HorizontalScrollView>
+            <RadioGroup android:id="@+id/radioPhotoRot" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="4dp">
+                <RadioButton android:id="@+id/radioPhotoSeq" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Em ordem" android:checked="true" android:textSize="13sp"/>
+                <RadioButton android:id="@+id/radioPhotoRnd" android:layout_width="0dp"
+                    android:layout_height="wrap_content" android:layout_weight="1"
+                    android:text="Ao acaso" android:textSize="13sp"/>
+            </RadioGroup>
+            <TextView android:id="@+id/tvPhotoInfo" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="" android:textSize="11sp"
+                android:textColor="#075E54" android:layout_marginBottom="12dp"/>
+
             <Button android:id="@+id/btnMsgStart" android:layout_width="match_parent"
                 android:layout_height="48dp" android:text="▶ Enviar mensagens"
                 android:backgroundTint="#075E54" android:textColor="#FFFFFF" android:textSize="14sp"
@@ -497,7 +534,9 @@
                 android:layout_marginBottom="4dp"/>
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="💡 Para marcar todo mundo, escreva @todos sozinho (com espaço antes e depois, ou no fim da mensagem). Só aparece em grupos de até 32 participantes; nos maiores a mensagem sai sem a marcação."
-                android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="16dp"/>
+                android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="8dp"/>
+            <TextView android:id="@+id/tvPhotoHomeInfo" android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="" android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="16dp"/>
 
             <!-- Digitação humana (fase 2) -->
             <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"

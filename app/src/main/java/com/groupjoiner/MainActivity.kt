@@ -22,6 +22,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityManager
 import android.view.inputmethod.InputMethodManager
 import android.widget.*
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
@@ -144,6 +145,19 @@ class MainActivity : AppCompatActivity() {
     private var pendingRemote = false   // chegou um comando do painel que espera esta tela abrir
     private val remoteSwitchListener = CompoundButton.OnCheckedChangeListener { _, checked -> onRemoteSwitch(checked) }
 
+    // fotos que saem antes do texto (aba Por lista; também valem para o envio depois de entrar e para os envios do painel)
+    private lateinit var btnPhotoPick: Button
+    private lateinit var btnPhotoClear: Button
+    private lateinit var switchPhotos: Switch
+    private lateinit var radioPhotoRot: RadioGroup
+    private lateinit var radioPhotoSeq: RadioButton
+    private lateinit var radioPhotoRnd: RadioButton
+    private lateinit var photoStrip: LinearLayout
+    private lateinit var tvPhotoInfo: TextView
+    private lateinit var tvPhotoHomeInfo: TextView
+    private var photoUiBusy = false     // true enquanto a tela das fotos está sendo desenhada (os botões não reagem)
+    private val pickPhotos = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> onPhotosPicked(uris) }
+
     private var phase2Links = mutableListOf<String>()
     private var isPhase2 = false
     private var isCheckingApproval = false
@@ -214,6 +228,11 @@ class MainActivity : AppCompatActivity() {
         historyAdapter.notifyDataSetChanged()
         updateHistoryCount()
         askNotificationPermission()
+        // sobra de foto na galeria (o app foi fechado no meio de um envio com foto): tira, se não há rodada em andamento
+        if (StorageManager.loadRun(this)?.active != true) {
+            val app = applicationContext
+            Thread { PhotoStore.cleanup(app) }.start()
+        }
         renderIdleStatus()
         // Se havia um processo em andamento (ou o sistema reabriu o app com um resultado), continua de onde parou
         handleIncoming(intent)
@@ -314,6 +333,15 @@ class MainActivity : AppCompatActivity() {
         btnMsgFromHistory = findViewById(R.id.btnMsgFromHistory)
         btnMsgClear     = findViewById(R.id.btnMsgClear)
         btnMsgStart     = findViewById(R.id.btnMsgStart)
+        btnPhotoPick    = findViewById(R.id.btnPhotoPick)
+        btnPhotoClear   = findViewById(R.id.btnPhotoClear)
+        switchPhotos    = findViewById(R.id.switchPhotos)
+        radioPhotoRot   = findViewById(R.id.radioPhotoRot)
+        radioPhotoSeq   = findViewById(R.id.radioPhotoSeq)
+        radioPhotoRnd   = findViewById(R.id.radioPhotoRnd)
+        photoStrip      = findViewById(R.id.photoStrip)
+        tvPhotoInfo     = findViewById(R.id.tvPhotoInfo)
+        tvPhotoHomeInfo = findViewById(R.id.tvPhotoHomeInfo)
         etMaxUnread     = findViewById(R.id.etMaxUnread)
         btnScan         = findViewById(R.id.btnScan)
         tvScanResult    = findViewById(R.id.tvScanResult)
@@ -518,6 +546,18 @@ class MainActivity : AppCompatActivity() {
 
         btnMsgStart.setOnClickListener { startMessagesOnly() }
 
+        // --- Fotos antes do texto ---
+        btnPhotoPick.setOnClickListener { choosePhotos() }
+        btnPhotoClear.setOnClickListener { askClearPhotos() }
+        switchPhotos.setOnCheckedChangeListener { _, marcado -> onPhotoSwitch(marcado) }
+        radioPhotoRot.setOnCheckedChangeListener { _, id ->
+            if (!photoUiBusy) {
+                PhotoStore.setMode(this, if (id == R.id.radioPhotoRnd) "rnd" else "seq")
+                refreshPhotoUi()
+            }
+        }
+        refreshPhotoUi()
+
         // O WhatsApp escolhido vale para tudo (Início e Por lista): as duas escolhas andam juntas
         radioMsgNormal.isChecked = !radioBusiness.isChecked
         radioMsgBusiness.isChecked = radioBusiness.isChecked
@@ -705,6 +745,15 @@ class MainActivity : AppCompatActivity() {
         for (cmd in RemoteControl.takeQueue(this)) {
             val id = cmd.optString("id")
             val type = cmd.optString("type")
+            if (type == "start") {
+                // o Novo envio pode trazer fotos (baixa antes de começar) e pode ser só "preencher": responde ao painel quando terminar
+                try {
+                    remoteStartAsync(cmd) { erro, nota -> RemoteControl.finish(this, id, type, erro, nota ?: RemoteControl.okNote(type)) }
+                } catch (e: Exception) {
+                    RemoteControl.finish(this, id, type, "erro no app: ${e.message}", "")
+                }
+                continue
+            }
             val erro: String? = try { remoteRun(cmd) } catch (e: Exception) { "erro no app: ${e.message}" }
             RemoteControl.finish(this, id, type, erro, RemoteControl.okNote(type))
         }
@@ -798,25 +847,87 @@ class MainActivity : AppCompatActivity() {
 
         selectedPackage = if (business) "com.whatsapp.w4b" else "com.whatsapp"
         if (business) radioBusiness.isChecked = true else radioNormal.isChecked = true
-        showTab("home")
+        val soPreencher = params.optBoolean("prefill", false)
+        showTab(if (soPreencher && !entrar) "messages" else "home")
         RunLog.add(
             this,
-            "☁ Painel: " + (if (entrar) "entrar em" else "enviar mensagem em") + " ${links.size} grupos pelo ${appName(selectedPackage)}"
+            "☁ Painel: " + (if (soPreencher) "preencher (sem começar) " else "") + (if (entrar) "entrar em" else "enviar mensagem em") +
+                " ${links.size} grupos pelo ${appName(selectedPackage)}" + (if (PhotoStore.isActive(this)) " · com foto antes do texto" else "")
         )
         if (entrar) {
             editTextLinks.setText(links.joinToString("\n"))
             updateLinkCount()
             switchSendMessage.isChecked = message.isNotEmpty()
             if (message.isNotEmpty()) etMessage.setText(message)
-            startProcessing()
+            saveSavedSettings()
+            if (!soPreencher) startProcessing()
         } else {
             editMsgLinks.setText(links.joinToString("\n"))
             etMsgOnly.setText(message)
             updateMsgLinkCount()
             saveSavedSettings()
-            beginMessages(links, message)
+            if (!soPreencher) beginMessages(links, message)
         }
         return null
+    }
+
+    /** Painel: Novo envio com fotos. Baixa as fotos (se vierem), guarda, preenche as abas e começa (ou só deixa preenchido). */
+    private fun remoteStartAsync(cmd: org.json.JSONObject, done: (String?, String?) -> Unit) {
+        // antes de baixar e trocar as fotos: nada em andamento (as fotos guardadas podem estar em uso)
+        if (isRunning || runActive || scanInProgress) {
+            done("já há um processo em andamento neste celular", null)
+            return
+        }
+        val params = cmd.optJSONObject("params") ?: org.json.JSONObject()
+        val soPreencher = params.optBoolean("prefill", false)
+        val notaPreenchido = if (soPreencher) "preenchido no celular; falta tocar em Enviar" else null
+        val media = cmd.optJSONObject("payload")?.optJSONArray("media")
+        val ids = mutableListOf<String>()
+        if (media != null) {
+            for (i in 0 until media.length()) {
+                val mid = media.optJSONObject(i)?.optString("id") ?: ""
+                if (mid.isNotEmpty()) ids.add(mid)
+            }
+        }
+        if (ids.isEmpty()) {
+            // pedido sem fotos: só o texto (as fotos guardadas ficam no app, desligadas)
+            PhotoStore.setOn(this, false)
+            refreshPhotoUi()
+            done(remoteStart(cmd, params), notaPreenchido)
+            return
+        }
+        if (!PhotoStore.supported()) {
+            done("o Android deste celular é antigo demais para mandar foto (precisa do Android 10 ou mais novo)", null)
+            return
+        }
+        Thread {
+            val baixadas = mutableListOf<ByteArray>()
+            var erro: String? = null
+            for ((i, mid) in ids.withIndex()) {
+                val r = PanelClient.downloadPhoto(this, mid)
+                val bytes = r.first
+                if (bytes == null) {
+                    erro = "não consegui baixar a foto ${i + 1}: ${r.second}"
+                    break
+                }
+                baixadas.add(bytes)
+            }
+            runOnUiThread {
+                if (erro != null) {
+                    done(erro, null)
+                    return@runOnUiThread
+                }
+                val falha = PhotoStore.replaceAll(this, baixadas)
+                if (falha != null) {
+                    done("não consegui guardar as fotos: $falha", null)
+                    return@runOnUiThread
+                }
+                PhotoStore.setMode(this, if (params.optString("rot", "seq") == "rnd") "rnd" else "seq")
+                PhotoStore.setOn(this, true)
+                refreshPhotoUi()
+                done(remoteStart(cmd, params), notaPreenchido)
+            }
+        }.start()
     }
 
     // =====================================================================
@@ -908,6 +1019,7 @@ class MainActivity : AppCompatActivity() {
         isRunning = true
         isPaused = false
         RunRuntime.leftChatOk = true   // processo novo: nenhum chat anterior em dúvida
+        PhotoStore.resetRun()          // rodada nova: nenhum grupo recebeu foto ainda
         RunRuntime.mentionOk = 0       // contadores da marcação @todos desta rodada (painel online)
         RunRuntime.mentionTotal = 0
         RunRuntime.step = "começando"
@@ -932,7 +1044,7 @@ class MainActivity : AppCompatActivity() {
         when (phase) {
             Phase.MESSAGES -> {
                 svc.setCheckApproval(false)
-                svc.setMessageMode(runMessage, switchHumanTyping.isChecked, readTypingWpm())
+                svc.setMessageMode(runMessage, switchHumanTyping.isChecked, readTypingWpm(), PhotoStore.isActive(this))
             }
             Phase.APPROVAL -> {
                 svc.clearMessageMode()
@@ -983,7 +1095,9 @@ class MainActivity : AppCompatActivity() {
         } else 50_000L
         // marcar @todos leva mais tempo (digitar aos poucos, esperar a lista, tocar, colar o resto)
         val extra = if (phase == Phase.MESSAGES && runMessage.contains("@todos", ignoreCase = true)) 30_000L else 0L
-        return base + extra
+        // mandar a foto antes (anexar, galeria, escolher, enviar) leva até uns 2 minutos a mais
+        val foto = if (phase == Phase.MESSAGES && PhotoStore.isActive(this)) 120_000L else 0L
+        return base + extra + foto
     }
 
     fun openNextLink() {
@@ -1813,9 +1927,12 @@ class MainActivity : AppCompatActivity() {
         // confirmação: mostra em qual WhatsApp vai sair, para quantos grupos e o começo da mensagem
         val app = if (radioMsgBusiness.isChecked) "WhatsApp Business" else "WhatsApp"
         val previa = if (msg.length > 120) msg.take(120) + "…" else msg
+        val fotos = if (PhotoStore.isActive(this)) {
+            "Foto antes do texto: ${PhotoStore.count(this)} ${if (PhotoStore.count(this) == 1) "foto" else "fotos"}, ${PhotoStore.modeText(this)}.\n\n"
+        } else ""
         AlertDialog.Builder(this)
             .setTitle("Enviar para ${links.size} grupos?")
-            .setMessage("Pelo $app.\n\nMensagem:\n$previa")
+            .setMessage("Pelo $app.\n\n${fotos}Mensagem:\n$previa")
             .setPositiveButton("Enviar") { _, _ ->
                 selectedPackage = if (radioMsgBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
                 saveSavedSettings()
@@ -1836,6 +1953,142 @@ class MainActivity : AppCompatActivity() {
         acquireScreenLock()
         beginRun(Phase.MESSAGES, message)
         openNextLink()
+    }
+
+    // =====================================================================
+    // Fotos antes do texto (escolha na aba Por lista; o painel online também preenche)
+    // =====================================================================
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** Desenha a parte das fotos (aba Por lista e a linha de aviso da aba Config) com o que está guardado. */
+    private fun refreshPhotoUi() {
+        photoUiBusy = true
+        try {
+            val files = PhotoStore.list(this)
+            val suportado = PhotoStore.supported()
+            val ligada = suportado && PhotoStore.isOn(this) && files.isNotEmpty()
+            switchPhotos.isEnabled = suportado
+            switchPhotos.isChecked = ligada
+            btnPhotoPick.isEnabled = suportado && files.size < PhotoStore.MAX
+            btnPhotoClear.isEnabled = files.isNotEmpty()
+            radioPhotoSeq.isEnabled = suportado
+            radioPhotoRnd.isEnabled = suportado
+            if (PhotoStore.mode(this) == "rnd") radioPhotoRnd.isChecked = true else radioPhotoSeq.isChecked = true
+            val palavra = if (files.size == 1) "foto" else "fotos"
+            tvPhotoInfo.text = when {
+                !suportado -> "A foto antes do texto precisa de Android 10 ou mais novo (este celular tem Android ${Build.VERSION.RELEASE}). Fica desligada."
+                files.isEmpty() -> "Nenhuma foto escolhida: sem foto, só o texto é enviado."
+                else -> "${files.size} de ${PhotoStore.MAX} fotos, ${PhotoStore.modeText(this)}. Cada grupo recebe uma foto e, logo depois, o texto. Toque numa foto para tirar da lista."
+            }
+            tvPhotoHomeInfo.text = when {
+                !suportado -> ""
+                ligada -> "📷 Foto antes do texto: LIGADA (${files.size} $palavra, ${PhotoStore.modeText(this)}). Para mudar, use a aba Por lista."
+                else -> "📷 Foto antes do texto: desligada (só o texto é enviado). Para ligar, use a aba Por lista."
+            }
+            // miniaturas (decodificadas fora da tela principal)
+            val atuais = files.toList()
+            Thread {
+                val minis = atuais.map { PhotoStore.thumbnail(it, 160) }
+                runOnUiThread {
+                    photoStrip.removeAllViews()
+                    atuais.forEachIndexed { i, f ->
+                        val iv = ImageView(this)
+                        val lp = LinearLayout.LayoutParams(dp(72), dp(72))
+                        lp.setMargins(0, 0, dp(6), 0)
+                        iv.layoutParams = lp
+                        iv.scaleType = ImageView.ScaleType.CENTER_CROP
+                        minis[i]?.let { iv.setImageBitmap(it) }
+                        iv.setOnClickListener { askRemovePhoto(f) }
+                        photoStrip.addView(iv)
+                    }
+                }
+            }.start()
+        } finally {
+            photoUiBusy = false
+        }
+    }
+
+    private fun choosePhotos() {
+        if (!PhotoStore.supported()) {
+            Toast.makeText(this, "A foto antes do texto precisa de Android 10 ou mais novo.", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (PhotoStore.count(this) >= PhotoStore.MAX) {
+            Toast.makeText(this, "Já são ${PhotoStore.MAX} fotos. Toque numa foto para tirar da lista antes de escolher outra.", Toast.LENGTH_LONG).show()
+            return
+        }
+        try {
+            pickPhotos.launch("image/*")
+        } catch (e: Exception) {
+            Toast.makeText(this, "Não consegui abrir a galeria: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** Voltou da escolha de fotos: reduz e guarda cada uma (fora da tela principal). */
+    private fun onPhotosPicked(uris: List<Uri>?) {
+        if (uris == null || uris.isEmpty()) return
+        val restam = maxOf(0, PhotoStore.MAX - PhotoStore.count(this))
+        val usar = uris.take(restam)
+        if (usar.isEmpty()) return
+        Toast.makeText(this, "Preparando ${usar.size} ${if (usar.size == 1) "foto" else "fotos"}...", Toast.LENGTH_SHORT).show()
+        Thread {
+            var ok = 0
+            var erro = ""
+            for (u in usar) {
+                val falha = PhotoStore.addFromUri(this, u)
+                if (falha == null) ok++ else if (erro.isEmpty()) erro = falha
+            }
+            runOnUiThread {
+                if (ok > 0 && !PhotoStore.isOn(this)) PhotoStore.setOn(this, true)   // escolheu foto = quer mandar
+                refreshPhotoUi()
+                val limite = if (uris.size > usar.size) " (o limite é ${PhotoStore.MAX} fotos)" else ""
+                val texto = if (ok > 0) {
+                    "$ok ${if (ok == 1) "foto guardada" else "fotos guardadas"}$limite" + (if (erro.isNotEmpty()) "; uma falhou: $erro" else "")
+                } else {
+                    "Não consegui guardar a foto: $erro"
+                }
+                Toast.makeText(this, texto, Toast.LENGTH_LONG).show()
+            }
+        }.start()
+    }
+
+    private fun askClearPhotos() {
+        val n = PhotoStore.count(this)
+        if (n == 0) return
+        AlertDialog.Builder(this)
+            .setTitle("Tirar as $n fotos do app?")
+            .setMessage("As fotos saem da lista (o painel pode mandar outras). Depois disso só o texto é enviado.")
+            .setPositiveButton("Tirar") { _, _ ->
+                PhotoStore.clear(this)
+                PhotoStore.setOn(this, false)
+                refreshPhotoUi()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun askRemovePhoto(f: java.io.File) {
+        AlertDialog.Builder(this)
+            .setTitle("Tirar esta foto da lista?")
+            .setPositiveButton("Tirar") { _, _ ->
+                PhotoStore.remove(this, f)
+                if (PhotoStore.count(this) == 0) PhotoStore.setOn(this, false)
+                refreshPhotoUi()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
+    }
+
+    private fun onPhotoSwitch(marcado: Boolean) {
+        if (photoUiBusy) return
+        if (marcado && PhotoStore.count(this) == 0) {
+            Toast.makeText(this, "Escolha ao menos uma foto primeiro.", Toast.LENGTH_SHORT).show()
+            refreshPhotoUi()
+            return
+        }
+        PhotoStore.setOn(this, marcado)
+        refreshPhotoUi()
     }
 
     // =====================================================================

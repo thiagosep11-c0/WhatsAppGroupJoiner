@@ -30,6 +30,7 @@ object PanelClient {
     private const val K_TOKEN = "token"
     private const val K_NAME = "name"
     private const val K_LAST_RUN = "last_run"
+    const val FEATURE_LEVEL = 2               // 2 = fotos no Novo envio e "só preencher" (o painel só manda isso a quem avisa que sabe)
     private const val MIN_GAP_MS = 6_000L     // sinais comuns: no máximo um a cada 6 s
     private const val FORCED_GAP_MS = 1_500L  // sinais importantes (fim de rodada, app aberto): no máximo um a cada 1,5 s
 
@@ -236,6 +237,37 @@ object PanelClient {
         }
     }
 
+    /**
+     * Baixa uma foto de um Novo envio (o painel entrega em texto base64). Devolve os bytes ou null e o motivo.
+     * Chame fora da tela principal (é rede).
+     */
+    fun downloadPhoto(context: Context, id: String): Pair<ByteArray?, String> {
+        val app = context.applicationContext
+        val auth = authHeader(app) ?: return Pair(null, "este celular não está conectado ao painel")
+        if (!id.matches(Regex("[0-9a-f]{16}"))) return Pair(null, "número de foto inválido")
+        val c = URL(url(app) + "/api/device/media?id=" + id).openConnection() as HttpURLConnection
+        try {
+            c.requestMethod = "GET"
+            c.connectTimeout = 10_000
+            c.readTimeout = 40_000
+            c.setRequestProperty("Authorization", auth)
+            val code = c.responseCode
+            if (code != 200) return Pair(null, "o painel respondeu $code")
+            val text = c.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val bytes = try {
+                android.util.Base64.decode(text, android.util.Base64.DEFAULT)
+            } catch (e: IllegalArgumentException) {
+                return Pair(null, "a foto veio estragada")
+            }
+            if (bytes.size < 200) return Pair(null, "a foto veio vazia")
+            return Pair(bytes, "")
+        } catch (e: Exception) {
+            return Pair(null, "sem conexão com o painel (" + (e.message ?: "rede") + ")")
+        } finally {
+            c.disconnect()
+        }
+    }
+
     private fun waName(pkg: String): String = if (pkg == "com.whatsapp.w4b") "WhatsApp Business" else "WhatsApp"
 
     private fun modelName(): String {
@@ -321,6 +353,8 @@ object PanelClient {
         o.put("model", modelName())
         o.put("appVersion", appVersion(ctx))
         o.put("build", AppUpdater.installedBuild(ctx))   // número do build instalado: o painel diz se há um mais novo
+        o.put("feat", FEATURE_LEVEL)                     // este app entende fotos no pedido e o "só preencher" (app antigo não manda isto)
+        o.put("photoOk", PhotoStore.supported())         // o Android deste celular deixa mandar foto (10 ou mais novo)
 
         // respostas dos comandos que o painel mandou e ainda não recebeu
         val acks = RemoteControl.pendingAcks(ctx)

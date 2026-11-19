@@ -2,4 +2,6 @@
 <!-- Android 11 e anterior: o token do painel online (uma credencial) não vai para o backup do Google -->
 <full-backup-content>
     <exclude domain="sharedpref" path="panel_prefs.xml" />
+    <!-- as fotos escolhidas para mandar antes do texto ficam só neste celular -->
+    <exclude domain="file" path="fotos" />
 </full-backup-content>
