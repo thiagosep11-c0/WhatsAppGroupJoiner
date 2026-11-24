@@ -46,6 +46,7 @@ object PhotoStore {
     @Volatile private var pickKey = ""  // grupo para o qual a foto atual foi escolhida
     @Volatile private var pickIdx = -1  // posição da foto escolhida para esse grupo
     @Volatile var dumps = 0            // diagnósticos de tela gravados nesta sessão (limite no serviço)
+    @Volatile var captionFails = 0     // grupos desta rodada em que a legenda não deu (com 2, o resto da rodada vai sem legenda)
 
     /** Android 11 ou mais novo: só assim o serviço de acessibilidade consegue trocar para o teclado do On Groups e voltar. */
     fun supported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
@@ -106,6 +107,7 @@ object PhotoStore {
         sentFor = ""
         pickKey = ""
         pickIdx = -1
+        captionFails = 0
     }
 
     private fun resetRotation(ctx: Context) {
@@ -297,6 +299,11 @@ object PhotoStore {
     }
 
     fun alreadySent(key: String): Boolean = sentFor.isNotEmpty() && sentFor == key
+
+    /** A foto anotada como enviada para este grupo NÃO saiu (ex.: Enviar da prévia sem efeito): o grupo volta a precisar da foto. */
+    fun uncommit(key: String) {
+        if (sentFor == key) sentFor = ""
+    }
 
     /**
      * Cópia em PNG da foto (para um campo de mensagem que só aceita PNG pelo teclado). Fica numa pasta temporária que o

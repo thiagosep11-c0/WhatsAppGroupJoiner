@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.text.Normalizer
 import kotlin.random.Random
 
@@ -25,6 +26,8 @@ class GroupJoinerService : AccessibilityService() {
     private var photoPlanned = false   // esta fase manda uma foto antes do texto em cada grupo
     private var captionMode = false    // o texto vai como legenda da foto (escrito na prévia, antes de tocar em Enviar)
     private var captionPending = false // a legenda está sendo escrita: quando tocar em Enviar, a foto também conta como enviada
+    private var captionTyping = false  // escrevendo na caixa de LEGENDA da prévia: os passos do texto usam essa caixa, não a do chat
+    private var captionSkip = false    // neste grupo a legenda não deu: a foto vai sem legenda e o texto logo depois, no chat
     private var humanTyping = true
     private var typingWpm = 70
     private var hasReturned = false
@@ -54,6 +57,8 @@ class GroupJoinerService : AccessibilityService() {
         if (waiting) {
             activeSeq = RunRuntime.groupSeq
             captionPending = false        // grupo novo: nenhuma legenda em andamento
+            captionTyping = false
+            captionSkip = false
             RunRuntime.mentionNote = ""   // grupo novo: a marcação @todos começa do zero
             RunRuntime.step = "esperando o WhatsApp abrir o grupo"
             mentionTried = false
@@ -82,6 +87,8 @@ class GroupJoinerService : AccessibilityService() {
         photoPlanned = false
         captionMode = false
         captionPending = false
+        captionTyping = false
+        captionSkip = false
         KeyboardBridge.pending = null
         imeRestore()   // se a rodada acabou no meio da foto, o teclado do usuário volta
         PhotoStore.cleanupLater(applicationContext, 20_000L)   // a última foto sai da galeria depois que o WhatsApp terminar com ela
@@ -487,8 +494,20 @@ class GroupJoinerService : AccessibilityService() {
         handler.postDelayed(step, delayMs)
     }
 
-    // Acha o campo de mensagem na tela atual (só no WhatsApp) e roda [block] nele
+    // Acha o campo de mensagem na tela atual (só no WhatsApp) e roda [block] nele.
+    // Escrevendo a legenda: o campo é a caixa de legenda da prévia da foto (nunca a caixa do chat que fica por trás).
     private fun withInputField(block: (AccessibilityNodeInfo) -> Unit): Boolean {
+        if (captionTyping) {
+            val legenda = findCaptionInput() ?: return false
+            return try {
+                block(legenda)
+                true
+            } catch (e: Exception) {
+                false
+            } finally {
+                safeRecycle(legenda)
+            }
+        }
         val root = rootInActiveWindow
         return try {
             val pkg = root?.packageName?.toString() ?: ""
@@ -529,9 +548,12 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun typingFocus(words: List<String>) {
-        setStep("tocando no campo de mensagem")
+        setStep(if (captionTyping) "tocando na caixa de legenda" else "tocando no campo de mensagem")
         val ok = withInputField { it.performAction(AccessibilityNodeInfo.ACTION_CLICK) }
-        if (!ok) { safeFinish("retry_env"); return }
+        if (!ok) {
+            if (captionTyping) captionTypingFailed("a caixa de legenda sumiu antes de eu começar a escrever") else safeFinish("retry_env")
+            return
+        }
         scheduleTyping(dFocus() + dWord(words[0])) {
             typingWord(words, 0, "")
         }
@@ -631,23 +653,38 @@ class GroupJoinerService : AccessibilityService() {
     }
 
     private fun typingSendClick(n: Int) {
-        setStep("tocando em Enviar")
-        val root = rootInActiveWindow
+        setStep(if (captionTyping) "tocando em Enviar (foto com legenda)" else "tocando em Enviar")
         var botao: AccessibilityNodeInfo? = null
         var tocou = false
-        if (root != null && isTargetRoot(root)) {
-            botao = findSendButton(root)
-            if (botao != null) tocou = botao.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        var descricao = "-"
+        if (captionTyping) {
+            // legenda: o Enviar da PRÉVIA da foto (nunca o do chat que fica por trás)
+            val roots = mentionRoots()
+            try {
+                botao = scanImageScreen(roots).send
+                if (botao != null) tocou = clickWithAncestors(botao)
+                descricao = describeNode(botao)
+            } catch (e: Exception) {
+                tocou = false
+            } finally {
+                roots.forEach { safeRecycle(it) }
+            }
+        } else {
+            val root = rootInActiveWindow
+            if (root != null && isTargetRoot(root)) {
+                botao = findSendButton(root)
+                if (botao != null) tocou = botao.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            }
+            descricao = describeNode(botao)
+            safeRecycle(root)
         }
-        val descricao = describeNode(botao)
-        safeRecycle(root)
         when {
             tocou -> {
                 if (n == 1) {
                     markSentNow() // anota na hora: se algo cair depois, o app não manda de novo nesse grupo
                     RunLog.add(applicationContext, "👆 Toquei em Enviar ($descricao)")
                 }
-                scheduleTyping(1_100L) { typingSendCheck(n, 1) }
+                if (captionTyping) scheduleTyping(1_300L) { captionSendCheck(n, 1) } else scheduleTyping(1_100L) { typingSendCheck(n, 1) }
             }
             n < 3 -> scheduleTyping(900L) { typingSendClick(n + 1) }
             else -> {
@@ -682,8 +719,222 @@ class GroupJoinerService : AccessibilityService() {
 
     // Não conseguiu enviar (tela mudou / sem botão de enviar): apaga o que foi digitado para não deixar rascunho solto no grupo
     private fun clearDraftAndFinish() {
+        if (captionTyping) {
+            captionTypingFailed("não consegui escrever a legenda")
+            return
+        }
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
         safeFinish("retry_env")
+    }
+
+    // ---------------- Texto como LEGENDA da foto ----------------
+    // Na prévia da foto: acha a caixa de legenda (se ela só vira campo depois de um toque, toca nela), escreve o texto com os
+    // mesmos passos conferidos do chat (inclusive @todos), toca no Enviar da prévia e confere que a prévia fechou.
+    // Se a legenda não der (caixa não encontrada, texto não confere, Enviar sem efeito): apaga o que foi escrito, grava a tela no
+    // Registro e manda a foto SEM legenda e o texto logo depois, no chat (o jeito que já funcionava). Nunca trava o grupo por isso.
+
+    // A caixa de legenda: campo editável numa janela do WhatsApp SEM a caixa do chat (a prévia). Prefere o de id "caption" ou com
+    // a dica "legenda/caption"; senão o primeiro campo editável da prévia.
+    private fun findCaptionInput(): AccessibilityNodeInfo? {
+        val roots = mentionRoots()
+        try {
+            for (root in roots) {
+                val achado = captionFieldIn(root, editable = true)
+                if (achado != null) return achado
+            }
+            return null
+        } catch (e: Exception) {
+            return null
+        } finally {
+            roots.forEach { safeRecycle(it) }
+        }
+    }
+
+    private fun captionLabel(n: AccessibilityNodeInfo): Boolean {
+        val id = n.viewIdResourceName ?: ""
+        val dica = if (Build.VERSION.SDK_INT >= 26) norm(n.hintText?.toString() ?: "") else ""
+        val tx = norm(n.text?.toString() ?: "")
+        val cd = norm(n.contentDescription?.toString() ?: "")
+        return id.endsWith("/caption") || id.contains("caption") ||
+            dica.contains("legenda") || dica.contains("caption") || tx.contains("legenda") || tx.contains("caption") ||
+            cd.contains("legenda") || cd.contains("caption")
+    }
+
+    // editable = true: só campo de digitar de verdade (para escrever). editable = false: também o "Adicione uma legenda" que
+    // ainda não é campo (para tocar e abrir). Janela com a caixa do chat (id "entry") nunca serve.
+    private fun captionFieldIn(root: AccessibilityNodeInfo, editable: Boolean): AccessibilityNodeInfo? {
+        var forte: AccessibilityNodeInfo? = null
+        var fraco: AccessibilityNodeInfo? = null
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var seen = 0
+        while (q.isNotEmpty() && seen < 900) {
+            val n = q.removeFirst()
+            seen++
+            val id = n.viewIdResourceName ?: ""
+            if (id.endsWith("/entry")) return null   // janela do chat: a legenda nunca é escrita aí
+            val cls = n.className?.toString() ?: ""
+            val campo = n.isEditable && cls.contains("EditText")
+            if (editable) {
+                if (campo && n.isVisibleToUser) {
+                    if (captionLabel(n)) { if (forte == null) forte = n } else if (fraco == null) fraco = n
+                }
+            } else if (n.isVisibleToUser) {
+                val tx = norm(n.text?.toString() ?: "") + " " + norm(n.contentDescription?.toString() ?: "")
+                val botaoEnviar = tx.contains("enviar") || tx.contains("send")
+                if (!botaoEnviar && captionLabel(n)) { if (forte == null) forte = n } else if (!botaoEnviar && cls.contains("EditText") && fraco == null) fraco = n
+            }
+            for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
+        }
+        return forte ?: fraco
+    }
+
+    // Toca na caixa de legenda que ainda não é campo de digitar (o WhatsApp pode só abrir o campo depois do toque)
+    private fun tapCaptionPlaceholder(): Boolean {
+        val roots = mentionRoots()
+        try {
+            for (root in roots) {
+                val alvo = captionFieldIn(root, editable = false) ?: continue
+                val ok = tapSmall(alvo) || alvo.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                RunLog.add(applicationContext, "👆 Foto: toque na caixa de legenda (${describeNode(alvo)})" + (if (ok) "" else " — sem resposta"))
+                return ok
+            }
+            return false
+        } catch (e: Exception) {
+            return false
+        } finally {
+            roots.forEach { safeRecycle(it) }
+        }
+    }
+
+    // Toca no nó ou num "pai" pequeno (a barra da legenda); nunca num pai grande: tocar na foto esconde os botões da prévia
+    private fun tapSmall(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val altura = resources.displayMetrics.heightPixels
+            val b = Rect()
+            var cur: AccessibilityNodeInfo? = node
+            var level = 0
+            while (cur != null && level < 4) {
+                cur.getBoundsInScreen(b)
+                if (b.height() > altura / 4) return false
+                if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+                cur = cur.parent
+                level++
+            }
+            false
+        } catch (e: Exception) { false }
+    }
+
+    // A prévia da foto continua aberta? (janela do WhatsApp sem a caixa do chat, com a caixa de legenda ou o Enviar)
+    private fun previewStillOpen(): Boolean {
+        val roots = mentionRoots()
+        return try {
+            val s = scanImageScreen(roots)
+            s.caption || s.send != null
+        } catch (e: Exception) {
+            false
+        } finally {
+            roots.forEach { safeRecycle(it) }
+        }
+    }
+
+    // Etapa 3 com legenda: acha a caixa (até 3 olhadas, tocando nela se ainda não for campo) e começa a escrever
+    private fun captionOpen(attempt: Int) {
+        setStep("procurando a caixa de legenda")
+        val campo = findCaptionInput()
+        if (campo != null) {
+            safeRecycle(campo)
+            captionTyping = true
+            captionPending = true
+            RunLog.add(applicationContext, "📝 Foto: escrevendo o texto como legenda")
+            startHumanTyping()
+            return
+        }
+        if (attempt < 3) {
+            val tocou = tapCaptionPlaceholder()
+            scheduleTyping(jit(if (tocou) 1_100L else 800L)) { captionOpen(attempt + 1) }
+            return
+        }
+        captionGiveUp("não achei a caixa de legenda na prévia da foto")
+    }
+
+    // Algo falhou enquanto escrevia a legenda: apaga o que foi escrito (nunca manda a foto com meia legenda) e decide o que fazer
+    private fun captionTypingFailed(reason: String) {
+        captionPending = false
+        try { withInputField { setInputText(it, "") } } catch (e: Exception) { }
+        scheduleTyping(600L) { captionClearCheck(reason, 1) }
+    }
+
+    private fun captionClearCheck(reason: String, n: Int) {
+        var resto = ""
+        var dica = false
+        val achou = withInputField { c ->
+            resto = c.text?.toString() ?: ""
+            dica = showingHint(c)
+        }
+        if (achou && !dica && stripAll(resto).isNotEmpty()) {
+            if (n < 3) {
+                withInputField { setInputText(it, "") }
+                scheduleTyping(600L) { captionClearCheck(reason, n + 1) }
+            } else {
+                captionTyping = false
+                imgFail("$reason e não consegui apagar a legenda")
+            }
+            return
+        }
+        captionTyping = false
+        // legenda vazia: com a prévia aberta, a foto vai sem legenda e o texto depois; sem prévia, o grupo é refeito
+        if (previewStillOpen()) captionGiveUp(reason) else imgFail("$reason (a prévia da foto fechou)")
+    }
+
+    // A legenda não deu neste grupo: a foto vai SEM legenda (Enviar da prévia) e o texto vai logo depois, no chat.
+    // Depois de 2 grupos assim na mesma rodada, os próximos já vão desse jeito (sem perder tempo tentando a legenda).
+    private fun captionGiveUp(reason: String) {
+        captionTyping = false
+        captionPending = false
+        captionSkip = true
+        PhotoStore.captionFails++
+        // a marcação @todos tentada na legenda não conta: ela vai ser tentada de novo no texto, no chat
+        if (mentionTried) {
+            RunRuntime.mentionTotal = (RunRuntime.mentionTotal - 1).coerceAtLeast(0)
+            if (RunRuntime.mentionNote == "marcou @todos") RunRuntime.mentionOk = (RunRuntime.mentionOk - 1).coerceAtLeast(0)
+            RunRuntime.mentionNote = ""
+            mentionTried = false
+        }
+        RunLog.add(applicationContext, "⚠ Foto: $reason. Mando a foto sem legenda e o texto logo depois")
+        if (PhotoStore.captionFails == 2) {
+            RunLog.add(applicationContext, "⚠ A legenda falhou em 2 grupos: até o fim desta rodada a foto vai sem legenda e o texto logo depois")
+        }
+        dumpImageScreen("legenda: $reason")
+        armImgTimeout()
+        imgStage = 3
+        imgTries = 0
+        scheduleTyping(jit(700L)) { imgTick() }
+    }
+
+    // Depois do toque em Enviar da prévia: a prévia tem que fechar (a foto saiu com a legenda)
+    private fun captionSendCheck(n: Int, checks: Int) {
+        setStep("conferindo que a foto saiu")
+        if (!previewStillOpen()) {
+            captionTyping = false
+            scheduleTyping(dStay()) { leaveChat("message_sent") }
+            return
+        }
+        when {
+            checks < 3 -> scheduleTyping(900L) { captionSendCheck(n, checks + 1) }   // o envio pode estar começando
+            n < 3 -> typingSendClick(n + 1)                                         // a prévia continua: o toque não pegou
+            else -> {
+                // 3 toques e a prévia continua aberta: nada saiu (desfaz a anotação de enviado e tenta sem legenda)
+                try {
+                    StorageManager.unmarkSent(
+                        applicationContext, RunRuntime.currentLink ?: "", RunRuntime.currentPkg.ifEmpty { "com.whatsapp" }
+                    )
+                } catch (e: Exception) {}
+                PhotoStore.uncommit(photoKey())
+                RunLog.add(applicationContext, "⛔ A prévia da foto continuou aberta depois de 3 toques em Enviar")
+                captionTypingFailed("o Enviar da prévia não respondeu")
+            }
+        }
     }
 
     // ---------------- Foto antes do texto (pelo teclado do On Groups) ----------------
@@ -697,7 +948,12 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun photoKey(): String = (RunRuntime.currentLink ?: "") + "|" + RunRuntime.currentPkg
 
-    private val imgKnown = sendLabels + setOf("legenda", "caption", "adicione uma legenda", "add a caption", "adicionar legenda")
+    private val imgKnown = sendLabels + setOf(
+        "legenda", "caption", "adicione uma legenda", "add a caption", "adicionar legenda", "adicionar uma legenda",
+        "mensagem", "message", "emoji", "visualizacao unica", "view once", "voltar", "back", "navegar para cima", "navigate up",
+        "cortar", "crop", "texto", "text", "desenhar", "draw", "figurinhas", "stickers", "hd", "qualidade", "quality",
+        "girar", "rotate", "filtros", "filters", "descartar", "discard", "cancelar", "cancel", "ok"
+    )
 
     private var imgStage = 2       // 2 = foto entregue (esperando a prévia); 3 = prévia (falta Enviar); 4 = enviada (conferindo)
     private var imgTicks = 0       // quantas olhadas já deu (limite geral)
@@ -771,12 +1027,16 @@ class GroupJoinerService : AccessibilityService() {
         imgTries = 0
         imgSendClicks = 0
         imgBackSeen = 0
-        // o limite de 20 s do setWaiting() não serve: troca por um para a foto (o texto põe o dele depois)
+        armImgTimeout()
+        scheduleTyping(400L) { imgPrepare() }
+    }
+
+    // O limite de 20 s do setWaiting() não serve: troca por um para a foto (o texto põe o dele depois)
+    private fun armImgTimeout() {
         timeoutRunnable?.let { handler.removeCallbacks(it) }
         val limit = Runnable { if (isActive) imgFail("tempo esgotado (100 s)") }
         timeoutRunnable = limit
         handler.postDelayed(limit, 100_000L)
-        scheduleTyping(400L) { imgPrepare() }
     }
 
     private fun imgPrepare() {
@@ -908,13 +1168,12 @@ class GroupJoinerService : AccessibilityService() {
                     }
                 }
                 3 -> {
-                    if (captionMode && messageToSend.isNotBlank()) {
-                        // legenda: o texto é escrito no campo de legenda da prévia (os mesmos passos conferidos do texto:
-                        // digita, confere que está igual, toca no Enviar da prévia e confere que saiu); a foto vai junto
-                        setStep("escrevendo a legenda da foto")
-                        captionPending = true
-                        RunLog.add(applicationContext, "📝 Foto: escrevendo o texto como legenda")
-                        scheduleTyping(jit(700L)) { startHumanTyping() }
+                    if (captionMode && !captionSkip && PhotoStore.captionFails < 2 && messageToSend.isNotBlank()) {
+                        // legenda: acha a caixa de legenda da prévia e escreve o texto nela (os mesmos passos conferidos do
+                        // texto: digita, confere que está igual, toca no Enviar da prévia e confere que a prévia fechou).
+                        // Se não der, a foto vai sem legenda e o texto logo depois, no chat (captionGiveUp)
+                        setStep("procurando a caixa de legenda")
+                        scheduleTyping(jit(700L)) { captionOpen(1) }
                         return
                     }
                     setStep("tocando em Enviar (foto)")
@@ -1001,32 +1260,62 @@ class GroupJoinerService : AccessibilityService() {
         safeFinish("photo_check")
     }
 
-    private fun imgKeep(s: String): String = if (norm(s).trim() in imgKnown) s else mask(s.take(30))
+    // Nomes de botões e dicas do próprio WhatsApp ficam legíveis no diagnóstico (sem os "..." do fim); o resto vira x
+    private fun imgKeep(s: String): String = if (norm(s).trim().trimEnd('.', '…', ' ') in imgKnown) s else mask(s.take(30))
+
+    private fun winType(t: Int): String = when (t) {
+        AccessibilityWindowInfo.TYPE_APPLICATION -> "app"
+        AccessibilityWindowInfo.TYPE_INPUT_METHOD -> "teclado"
+        AccessibilityWindowInfo.TYPE_SYSTEM -> "sistema"
+        AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> "acessibilidade"
+        else -> "tipo $t"
+    }
 
     // Estrutura da tela (sem nomes: letras viram x, só os nomes dos botões ficam legíveis). No máximo 6 por sessão.
+    // Mostra também as janelas na tela (app, teclado, sistema) e, em cada campo, se é editável e a dica ("Adicione uma legenda").
     private fun dumpImageScreen(motivo: String) {
         if (PhotoStore.dumps >= 6) return
         PhotoStore.dumps++
         try {
             val sb = StringBuilder("🔍 Diagnóstico da foto ($motivo). Letras trocadas por x; só os nomes dos botões ficam legíveis")
+            try {
+                val todas = windows
+                if (todas != null && todas.isNotEmpty()) {
+                    val partes = todas.mapIndexed { i, w ->
+                        val p = try { w.root?.packageName?.toString() ?: "?" } catch (e: Exception) { "?" }
+                        "${i + 1}) ${winType(w.type)} $p" + (if (w.isActive) " (ativa)" else "") + (if (w.isFocused) " (foco)" else "")
+                    }
+                    sb.append("\n   janelas: ").append(partes.joinToString(" · "))
+                }
+            } catch (e: Exception) { }
             val janelas = mutableListOf<AccessibilityNodeInfo>()
             try { rootInActiveWindow?.let { janelas.add(it) } } catch (e: Exception) { }
             for (r in mentionRoots()) if (janelas.none { it == r }) janelas.add(r)
             val b = Rect()
             for ((wi, root) in janelas.withIndex()) {
-                sb.append("\n   [janela ${wi + 1}] pacote ${root.packageName ?: "?"} | classe | id | texto | descrição | toque | topo-fundo")
+                sb.append("\n   [janela ${wi + 1}] pacote ${root.packageName ?: "?"} | classe | id | texto | descrição | dica | estado | topo-fundo")
                 var n = 0
                 val q = ArrayDeque<AccessibilityNodeInfo>()
                 q.add(root)
-                while (q.isNotEmpty() && n < 60) {
+                while (q.isNotEmpty() && n < 70) {
                     val node = q.removeFirst()
                     val txt = node.text?.toString() ?: ""
                     val desc = node.contentDescription?.toString() ?: ""
-                    if (txt.isNotEmpty() || desc.isNotEmpty() || node.isClickable) {
+                    val dica = if (Build.VERSION.SDK_INT >= 26) (node.hintText?.toString() ?: "") else ""
+                    val clsFull = node.className?.toString() ?: ""
+                    val campo = node.isEditable || clsFull.contains("EditText")
+                    if (txt.isNotEmpty() || desc.isNotEmpty() || dica.isNotEmpty() || node.isClickable || campo) {
                         node.getBoundsInScreen(b)
-                        val cls = node.className?.toString()?.substringAfterLast('.') ?: "-"
+                        val cls = clsFull.substringAfterLast('.').ifEmpty { "-" }
                         val id = node.viewIdResourceName?.substringAfterLast('/') ?: "-"
-                        sb.append("\n   $cls | $id | ${imgKeep(txt)} | ${imgKeep(desc)} | ${if (node.isClickable) "toque" else "-"} | ${b.top}-${b.bottom}")
+                        val estado = listOfNotNull(
+                            if (node.isClickable) "toque" else null,
+                            if (node.isEditable) "editável" else null,
+                            if (node.isFocused) "foco" else null,
+                            if (!node.isVisibleToUser) "oculto" else null,
+                            if (!node.isEnabled) "desligado" else null
+                        ).joinToString("+").ifEmpty { "-" }
+                        sb.append("\n   $cls | $id | ${imgKeep(txt)} | ${imgKeep(desc)} | ${imgKeep(dica)} | $estado | ${b.top}-${b.bottom}")
                         n++
                     }
                     for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
@@ -1395,7 +1684,9 @@ class GroupJoinerService : AccessibilityService() {
         waCheckDone = null
         KeyboardBridge.pending = null
         imeRestore()   // se parou no meio da foto, o teclado do usuário volta
-        try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
+        try { withInputField { setInputText(it, "") } } catch (e: Exception) {}   // escrevendo a legenda: apaga a legenda
+        captionTyping = false
+        captionPending = false
     }
 
     // ---------------- Escanear: lê a lista de conversas do WhatsApp (SÓ LEITURA: não envia nada) ----------------
