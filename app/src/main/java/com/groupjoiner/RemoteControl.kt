@@ -54,6 +54,7 @@ object RemoteControl {
         "log" -> "Pedir registro"
         "update" -> "Atualizar app"
         "wacheck" -> "Verificar WhatsApp"
+        "switchwa" -> "Trocar WhatsApp"
         else -> type
     }
 
@@ -226,9 +227,22 @@ object RemoteControl {
             }
             "finalize" -> finalizeNow(ctx, id, type)
             "update" -> finish(ctx, id, type, AppUpdater.start(ctx, true), okNote(type))   // baixa e entrega ao instalador do Android
+            "switchwa" -> switchWa(ctx, id, type, cmd)   // troca o WhatsApp do envio sem trazer o app para a frente (não atrapalha o grupo aberto)
             "pause", "resume", "start", "scan", "approvals", "wacheck" -> viaApp(ctx, cmd)
             else -> finish(ctx, id, type, "comando desconhecido neste app", "")
         }
+    }
+
+    /** Painel: trocar o WhatsApp do envio (vale a partir do próximo grupo; o grupo aberto agora termina no WhatsApp atual). */
+    private fun switchWa(ctx: Context, id: String, type: String, cmd: JSONObject) {
+        val params = cmd.optJSONObject("params") ?: JSONObject()
+        val pkg = if (params.optString("wa") == "business") "com.whatsapp.w4b" else "com.whatsapp"
+        val act = MainActivity.instance
+        if (act == null) {
+            finish(ctx, id, type, "a tela do app não está aberta no celular (abra o app e tente de novo)", "")
+            return
+        }
+        finish(ctx, id, type, act.remoteSwitchWa(pkg), "agora o envio usa o " + WaHealth.name(pkg))
     }
 
     private fun finalizeNow(ctx: Context, id: String, type: String) {

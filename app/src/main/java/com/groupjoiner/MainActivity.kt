@@ -811,6 +811,38 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    /**
+     * Painel: trocar o WhatsApp do envio. Com rodada em andamento, o grupo que está aberto termina no WhatsApp atual e os
+     * próximos usam o escolhido; com a rodada pausada (ex.: WhatsApp sem cadastro), ao Continuar o mesmo grupo é refeito
+     * já no WhatsApp novo. Sem rodada, vira o WhatsApp escolhido para os próximos envios.
+     */
+    fun remoteSwitchWa(pkg: String): String? {
+        if (pkg != "com.whatsapp" && pkg != "com.whatsapp.w4b") return "WhatsApp inválido"
+        if (!WaHealth.installed(this, pkg)) return "o ${WaHealth.name(pkg)} não está instalado neste celular"
+        val antes = selectedPackage
+        selectedPackage = pkg
+        if (pkg == "com.whatsapp.w4b") radioBusiness.isChecked = true else radioNormal.isChecked = true
+        saveSavedSettings()
+        if (runActive || isRunning) {
+            // o grupo em andamento continua no WhatsApp atual (o serviço confere o pacote dele); o próximo já usa o novo
+            if (stage != "GROUP" || RunRuntime.groupDone) RunRuntime.currentPkg = pkg
+            val espera = when {
+                isPaused -> 24L * 3_600_000L
+                stage == "GROUP" && !RunRuntime.groupDone -> groupBudgetMs()
+                else -> 120_000L
+            }
+            persistRun(stage, espera)
+            RunLog.add(
+                this,
+                "☁ Painel: o envio passa a usar o ${appName(pkg)} (antes: ${appName(antes)})" +
+                    (if (isPaused) ". Toque em Continuar para seguir" else ", a partir do próximo grupo")
+            )
+        } else {
+            RunLog.add(this, "☁ Painel: WhatsApp escolhido agora é o ${appName(pkg)}")
+        }
+        return null
+    }
+
     /** Painel: Pausar. */
     fun remotePause(): String? {
         if (!(isRunning || runActive)) return "nada em andamento para pausar"
