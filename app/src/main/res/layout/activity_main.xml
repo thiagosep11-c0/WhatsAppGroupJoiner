@@ -301,6 +301,9 @@
                 android:layout_marginBottom="4dp"/>
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="💡 Para marcar todo mundo, escreva @todos sozinho (com espaço antes e depois, ou no fim da mensagem). O app digita @todos e toca na opção Todos que o WhatsApp mostra. Só aparece em grupos de até 32 participantes; nos maiores a mensagem sai sem a marcação."
+                android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="4dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="🔁 Mensagens intercaladas: escreva cada mensagem separada por uma linha só com --- (três tracinhos). Cada grupo recebe uma delas, alternando do mesmo jeito das fotos (em ordem ou ao acaso)."
                 android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="12dp"/>
 
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -338,7 +341,13 @@
             </RadioGroup>
             <TextView android:id="@+id/tvPhotoInfo" android:layout_width="match_parent"
                 android:layout_height="wrap_content" android:text="" android:textSize="11sp"
-                android:textColor="#075E54" android:layout_marginBottom="12dp"/>
+                android:textColor="#075E54" android:layout_marginBottom="6dp"/>
+            <TextView android:id="@+id/tvKbdInfo" android:layout_width="match_parent"
+                android:layout_height="wrap_content" android:text="" android:textSize="11sp"
+                android:textColor="#37474F" android:layout_marginBottom="4dp"/>
+            <Button android:id="@+id/btnKbdEnable" android:layout_width="match_parent" android:layout_height="42dp"
+                android:text="⌨ Ativar teclado do On Groups" android:backgroundTint="#37474F"
+                android:textColor="#FFFFFF" android:textSize="12sp" android:layout_marginBottom="12dp"/>
 
             <Button android:id="@+id/btnMsgStart" android:layout_width="match_parent"
                 android:layout_height="48dp" android:text="▶ Enviar mensagens"
@@ -535,6 +544,9 @@
             <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="💡 Para marcar todo mundo, escreva @todos sozinho (com espaço antes e depois, ou no fim da mensagem). Só aparece em grupos de até 32 participantes; nos maiores a mensagem sai sem a marcação."
                 android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="8dp"/>
+            <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
+                android:text="🔁 Mensagens intercaladas: separe cada mensagem com uma linha só com --- (três tracinhos)."
+                android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="4dp"/>
             <TextView android:id="@+id/tvPhotoHomeInfo" android:layout_width="match_parent" android:layout_height="wrap_content"
                 android:text="" android:textSize="11sp" android:textColor="#075E54" android:layout_marginBottom="16dp"/>
 

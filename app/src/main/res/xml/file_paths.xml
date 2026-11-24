@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pastas que o app pode entregar a outro app (só o arquivo da foto da vez, com permissão temporária de leitura) -->
+<paths>
+    <files-path name="fotos" path="fotos/" />
+    <cache-path name="envio" path="fotos_envio/" />
+</paths>

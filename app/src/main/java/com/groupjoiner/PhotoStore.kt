@@ -25,8 +25,9 @@ import kotlin.random.Random
  *   (não são apagados por "Limpar histórico").
  * - Rodízio: "seq" (em ordem: 1, 2, 3, 1, 2, 3...) ou "rnd" (ao acaso, nunca a mesma duas vezes seguidas). O rodízio só anda
  *   quando a foto SAIU de verdade num grupo; se o grupo for refeito, ele usa a mesma foto.
- * - Para o WhatsApp enxergar a foto da vez, ela é colocada sozinha numa pasta "On Groups" da galeria (MediaStore, sem
- *   permissão nenhuma, só no Android 10 ou mais novo) e tirada de lá depois.
+ * - A foto da vez entra no grupo pelo "teclado" do On Groups (OnGroupsKeyboard): ele coloca o arquivo direto na caixa de
+ *   mensagem do grupo aberto, sem passar pela galeria (Android 11 ou mais novo, com o teclado ativado uma vez pelo usuário).
+ * - A versão 1.0.68 colocava a foto numa pasta "On Groups" da galeria; [cleanup] ainda tira de lá o que tiver sobrado.
  */
 object PhotoStore {
     const val MAX = 10
@@ -46,8 +47,8 @@ object PhotoStore {
     @Volatile private var pickIdx = -1  // posição da foto escolhida para esse grupo
     @Volatile var dumps = 0            // diagnósticos de tela gravados nesta sessão (limite no serviço)
 
-    /** Android 10 ou mais novo: só assim dá para colocar a foto na galeria sem pedir permissão. */
-    fun supported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+    /** Android 11 ou mais novo: só assim o serviço de acessibilidade consegue trocar para o teclado do On Groups e voltar. */
+    fun supported(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     private fun dir(ctx: Context): File = File(ctx.applicationContext.filesDir, DIR).apply { mkdirs() }
 
@@ -290,46 +291,24 @@ object PhotoStore {
 
     fun alreadySent(key: String): Boolean = sentFor.isNotEmpty() && sentFor == key
 
-    // ---------- galeria (para o WhatsApp enxergar a foto da vez) ----------
-
-    /** Coloca a foto, sozinha, na pasta "On Groups" da galeria. Devolve o endereço ou null se não deu. */
-    fun insertForSend(ctx: Context, file: File): Uri? {
-        if (!supported()) return null
-        val app = ctx.applicationContext
+    /**
+     * Cópia em PNG da foto (para um campo de mensagem que só aceita PNG pelo teclado). Fica numa pasta temporária que o
+     * FileProvider entrega (res/xml/file_paths.xml); a cópia anterior é trocada. Devolve null se não deu.
+     */
+    fun pngCopy(ctx: Context, file: File): File? {
         return try {
-            cleanup(app)   // tira a da vez anterior: assim a nova é sempre a única (e a mais recente) da pasta
-            val resolver = app.contentResolver
-            val now = System.currentTimeMillis()
-            val v = ContentValues()
-            v.put(MediaStore.Images.Media.DISPLAY_NAME, "OnGroups_$now.jpg")
-            v.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
-            v.put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/$ALBUM")
-            v.put(MediaStore.Images.Media.DATE_TAKEN, now)
-            v.put(MediaStore.Images.Media.IS_PENDING, 1)
-            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, v) ?: return null
-            val out = resolver.openOutputStream(uri)
-            if (out == null) {
-                resolver.delete(uri, null, null)
-                return null
-            }
-            out.use { o -> file.inputStream().use { it.copyTo(o) } }
-            val pronto = ContentValues()
-            pronto.put(MediaStore.Images.Media.IS_PENDING, 0)
-            resolver.update(uri, pronto, null, null)
-            remember(app, uri)
-            uri
-        } catch (e: Exception) {
+            val dir = File(ctx.applicationContext.cacheDir, "fotos_envio").apply { mkdirs() }
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: return null
+            val out = File(dir, "foto_envio.png")
+            out.outputStream().use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            bmp.recycle()
+            out
+        } catch (e: Throwable) {
             null
         }
     }
 
-    private fun remember(ctx: Context, uri: Uri) {
-        try {
-            val a = JSONArray(StorageManager.getPref(ctx, K_INSERTED, "[]"))
-            a.put(uri.toString())
-            StorageManager.setPref(ctx, K_INSERTED, a.toString())
-        } catch (e: Exception) { }
-    }
+    // ---------- sobras da versão 1.0.68 (que colocava a foto numa pasta da galeria) ----------
 
     private fun insertedList(ctx: Context): MutableList<String> {
         val out = mutableListOf<String>()

@@ -30,7 +30,9 @@ object PanelClient {
     private const val K_TOKEN = "token"
     private const val K_NAME = "name"
     private const val K_LAST_RUN = "last_run"
-    const val FEATURE_LEVEL = 2               // 2 = fotos no Novo envio e "só preencher" (o painel só manda isso a quem avisa que sabe)
+    // 3 = foto pelo teclado do On Groups, mensagens intercaladas, estado dos WhatsApp e "Verificar WhatsApp"
+    // (2 era a foto pela galeria, que não funcionou; o painel só manda o que o app avisa que sabe fazer)
+    const val FEATURE_LEVEL = 3
     private const val MIN_GAP_MS = 6_000L     // sinais comuns: no máximo um a cada 6 s
     private const val FORCED_GAP_MS = 1_500L  // sinais importantes (fim de rodada, app aberto): no máximo um a cada 1,5 s
 
@@ -354,7 +356,9 @@ object PanelClient {
         o.put("appVersion", appVersion(ctx))
         o.put("build", AppUpdater.installedBuild(ctx))   // número do build instalado: o painel diz se há um mais novo
         o.put("feat", FEATURE_LEVEL)                     // este app entende fotos no pedido e o "só preencher" (app antigo não manda isto)
-        o.put("photoOk", PhotoStore.supported())         // o Android deste celular deixa mandar foto (10 ou mais novo)
+        o.put("photoOk", PhotoStore.supported())         // o Android deste celular deixa mandar foto pelo teclado (11 ou mais novo)
+        o.put("kbd", KeyboardBridge.isEnabled(ctx))      // o teclado do On Groups está ativado (sem ele a foto não vai)
+        o.put("waList", WaHealth.toJson(ctx))            // WhatsApp e Business: instalado? funcionando, banido, sem conta?
 
         // respostas dos comandos que o painel mandou e ainda não recebeu
         val acks = RemoteControl.pendingAcks(ctx)

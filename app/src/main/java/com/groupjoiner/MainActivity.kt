@@ -155,6 +155,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var photoStrip: LinearLayout
     private lateinit var tvPhotoInfo: TextView
     private lateinit var tvPhotoHomeInfo: TextView
+    private lateinit var tvKbdInfo: TextView
+    private lateinit var btnKbdEnable: Button
     private var photoUiBusy = false     // true enquanto a tela das fotos está sendo desenhada (os botões não reagem)
     private val pickPhotos = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> onPhotosPicked(uris) }
 
@@ -260,6 +262,7 @@ class MainActivity : AppCompatActivity() {
         if (RemoteControl.keepAlive(this) && !ForegroundService.isRunning) ForegroundService.start(this)
         refreshRemoteInfo()
         refreshUpdateInfo()
+        refreshPhotoUi()   // volta das configurações de teclado: mostra se o teclado do On Groups ficou ativado
     }
 
     override fun onPause() {
@@ -342,6 +345,8 @@ class MainActivity : AppCompatActivity() {
         photoStrip      = findViewById(R.id.photoStrip)
         tvPhotoInfo     = findViewById(R.id.tvPhotoInfo)
         tvPhotoHomeInfo = findViewById(R.id.tvPhotoHomeInfo)
+        tvKbdInfo       = findViewById(R.id.tvKbdInfo)
+        btnKbdEnable    = findViewById(R.id.btnKbdEnable)
         etMaxUnread     = findViewById(R.id.etMaxUnread)
         btnScan         = findViewById(R.id.btnScan)
         tvScanResult    = findViewById(R.id.tvScanResult)
@@ -548,6 +553,7 @@ class MainActivity : AppCompatActivity() {
 
         // --- Fotos antes do texto ---
         btnPhotoPick.setOnClickListener { choosePhotos() }
+        btnKbdEnable.setOnClickListener { openKeyboardSettings() }
         btnPhotoClear.setOnClickListener { askClearPhotos() }
         switchPhotos.setOnCheckedChangeListener { _, marcado -> onPhotoSwitch(marcado) }
         radioPhotoRot.setOnCheckedChangeListener { _, id ->
@@ -754,6 +760,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 continue
             }
+            if (type == "wacheck") {
+                // Verificar WhatsApp: abre cada um, olha a tela e volta; responde ao painel com o resumo
+                try {
+                    remoteWaCheck { erro, nota -> RemoteControl.finish(this, id, type, erro, nota ?: RemoteControl.okNote(type)) }
+                } catch (e: Exception) {
+                    RemoteControl.finish(this, id, type, "erro no app: ${e.message}", "")
+                }
+                continue
+            }
             val erro: String? = try { remoteRun(cmd) } catch (e: Exception) { "erro no app: ${e.message}" }
             RemoteControl.finish(this, id, type, erro, RemoteControl.okNote(type))
         }
@@ -839,7 +854,18 @@ class MainActivity : AppCompatActivity() {
             if (l.startsWith("http") && !links.contains(l)) links.add(l)
         }
         if (links.isEmpty()) return "a lista de grupos veio vazia"
-        val message = payload.optString("message", "").trim()
+        // mensagens intercaladas: o painel manda a lista; na caixa do app elas ficam separadas por uma linha com ---
+        val varias = mutableListOf<String>()
+        val listaMsgs = payload.optJSONArray("messages")
+        if (listaMsgs != null) {
+            for (i in 0 until listaMsgs.length()) {
+                val m = listaMsgs.optString(i).trim()
+                if (m.isNotEmpty()) varias.add(m)
+            }
+        }
+        val message = if (varias.size > 1) MessageVariants.join(varias) else payload.optString("message", "").trim()
+        if (varias.size > 1) MessageVariants.resetRotation(this)
+        if (params.has("rot")) PhotoStore.setMode(this, if (params.optString("rot") == "rnd") "rnd" else "seq")
         val entrar = params.optString("mode", "messages") == "join"
         val business = params.optString("wa", "normal") == "business"
         if (!entrar && message.isEmpty()) return "a mensagem veio vazia"
@@ -869,6 +895,34 @@ class MainActivity : AppCompatActivity() {
             if (!soPreencher) beginMessages(links, message)
         }
         return null
+    }
+
+    /** Painel: Verificar WhatsApp. Abre cada WhatsApp instalado, olha a tela (banido? sem conta? funcionando?) e volta. */
+    private fun remoteWaCheck(done: (String?, String?) -> Unit) {
+        if (isRunning || runActive || scanInProgress) {
+            done("já há um processo em andamento neste celular", null)
+            return
+        }
+        val svc = GroupJoinerService.serviceInstance
+        if (svc == null || !isAccessibilityEnabled()) {
+            done("serviço de acessibilidade desligado", null)
+            return
+        }
+        val tela = remoteScreenProblem()
+        if (tela != null) {
+            done(tela, null)
+            return
+        }
+        RunLog.add(this, "🩺 Verificando os WhatsApp deste celular (só olha a tela, não toca em nada)")
+        PanelClient.beat(this, true)
+        svc.checkWhatsApps(WaHealth.PKGS) { res ->
+            val resumo = WaHealth.summary(res)
+            RunRuntime.step = ""
+            RunLog.add(this, "🩺 $resumo")
+            refreshPhotoUi()
+            PanelClient.beat(this, true)
+            done(null, resumo)
+        }
     }
 
     /** Painel: Novo envio com fotos. Baixa as fotos (se vierem), guarda, preenche as abas e começa (ou só deixa preenchido). */
@@ -1020,6 +1074,7 @@ class MainActivity : AppCompatActivity() {
         isPaused = false
         RunRuntime.leftChatOk = true   // processo novo: nenhum chat anterior em dúvida
         PhotoStore.resetRun()          // rodada nova: nenhum grupo recebeu foto ainda
+        MessageVariants.resetRun()
         RunRuntime.mentionOk = 0       // contadores da marcação @todos desta rodada (painel online)
         RunRuntime.mentionTotal = 0
         RunRuntime.step = "começando"
@@ -1044,7 +1099,10 @@ class MainActivity : AppCompatActivity() {
         when (phase) {
             Phase.MESSAGES -> {
                 svc.setCheckApproval(false)
-                svc.setMessageMode(runMessage, switchHumanTyping.isChecked, readTypingWpm(), PhotoStore.isActive(this))
+                // mensagens intercaladas (separadas por ---): cada grupo recebe uma; grupo refeito recebe a mesma
+                val chave = (linkList.getOrNull(currentIndex) ?: "") + "|" + selectedPackage
+                val msg = MessageVariants.pickFor(this, chave, runMessage)
+                svc.setMessageMode(msg, switchHumanTyping.isChecked, readTypingWpm(), PhotoStore.isActive(this))
             }
             Phase.APPROVAL -> {
                 svc.clearMessageMode()
@@ -1306,6 +1364,21 @@ class MainActivity : AppCompatActivity() {
             handleEnvRetry("WhatsApp/tela não respondeu")
             return
         }
+        // o serviço pediu pausa: foto que não dá para pôr (teclado desativado...), foto sem confirmação, WhatsApp banido ou sem conta
+        if (status == "photo_stop" || status == "photo_check" || status == "wa_banned" || status == "wa_noaccount") {
+            attempt = 1
+            val motivo = RunRuntime.stopNote.ifEmpty { "o app pediu para pausar (veja o Registro)" }
+            RunRuntime.stopNote = ""
+            if (status == "photo_check") {
+                // não dá para saber se a foto saiu: este grupo não é refeito (nunca a foto duas vezes); ao continuar, segue do próximo
+                val linkAtual = linkList.getOrNull(currentIndex) ?: ""
+                updateLinkStatus(currentIndex, "error_env")
+                addToHistory(linkAtual, "error_env")
+                currentIndex++
+            }
+            pauseRun(motivo)
+            return
+        }
         attempt = 1
         envFailures = 0
 
@@ -1346,6 +1419,11 @@ class MainActivity : AppCompatActivity() {
                 addToHistory(link, status)
             }
         }
+        // o WhatsApp respondeu normalmente: está funcionando (vai para o painel); mensagem intercalada que saiu faz o rodízio andar
+        if (status in setOf("joined", "requested", "pending", "already_member", "message_sent", "admin_only", "approved", "still_pending")) {
+            WaHealth.set(this, selectedPackage, WaHealth.OK)
+        }
+        if (status == "message_sent") MessageVariants.commitSent(this, runMessage)
         // marcação @todos: diz no registro se marcou ou por que não marcou naquele grupo
         val marcacao = RunRuntime.mentionNote
         RunLog.add(
@@ -1926,13 +2004,17 @@ class MainActivity : AppCompatActivity() {
         }
         // confirmação: mostra em qual WhatsApp vai sair, para quantos grupos e o começo da mensagem
         val app = if (radioMsgBusiness.isChecked) "WhatsApp Business" else "WhatsApp"
-        val previa = if (msg.length > 120) msg.take(120) + "…" else msg
+        val variantes = MessageVariants.split(msg)
+        val primeira = variantes.firstOrNull() ?: msg
+        val previa = if (primeira.length > 120) primeira.take(120) + "…" else primeira
         val fotos = if (PhotoStore.isActive(this)) {
-            "Foto antes do texto: ${PhotoStore.count(this)} ${if (PhotoStore.count(this) == 1) "foto" else "fotos"}, ${PhotoStore.modeText(this)}.\n\n"
+            "Foto antes do texto: ${PhotoStore.count(this)} ${if (PhotoStore.count(this) == 1) "foto" else "fotos"}, ${PhotoStore.modeText(this)}." +
+                (if (KeyboardBridge.isEnabled(this)) "" else " ⚠ O teclado do On Groups está DESATIVADO: a rodada vai pausar na foto.") + "\n\n"
         } else ""
+        val intercaladas = if (variantes.size > 1) "Mensagens intercaladas: ${variantes.size}, ${PhotoStore.modeText(this)}.\n\n" else ""
         AlertDialog.Builder(this)
             .setTitle("Enviar para ${links.size} grupos?")
-            .setMessage("Pelo $app.\n\n${fotos}Mensagem:\n$previa")
+            .setMessage("Pelo $app.\n\n$fotos${intercaladas}Mensagem${if (variantes.size > 1) " 1" else ""}:\n$previa")
             .setPositiveButton("Enviar") { _, _ ->
                 selectedPackage = if (radioMsgBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
                 saveSavedSettings()
@@ -1981,11 +2063,19 @@ class MainActivity : AppCompatActivity() {
                 files.isEmpty() -> "Nenhuma foto escolhida: sem foto, só o texto é enviado."
                 else -> "${files.size} de ${PhotoStore.MAX} fotos, ${PhotoStore.modeText(this)}. Cada grupo recebe uma foto e, logo depois, o texto. Toque numa foto para tirar da lista."
             }
+            val teclado = suportado && KeyboardBridge.isEnabled(this)
             tvPhotoHomeInfo.text = when {
                 !suportado -> ""
+                ligada && !teclado -> "📷 Foto antes do texto: LIGADA, mas o teclado do On Groups está desativado (aba Por lista > Ativar teclado)."
                 ligada -> "📷 Foto antes do texto: LIGADA (${files.size} $palavra, ${PhotoStore.modeText(this)}). Para mudar, use a aba Por lista."
                 else -> "📷 Foto antes do texto: desligada (só o texto é enviado). Para ligar, use a aba Por lista."
             }
+            tvKbdInfo.text = when {
+                !suportado -> ""
+                teclado -> "⌨ Teclado do On Groups: ativado ✅. O app troca para ele só na hora de pôr a foto no grupo e volta sozinho para o seu teclado."
+                else -> "⌨ Para mandar a foto, ative uma vez o teclado do On Groups (botão abaixo). Ele não tem teclas e não lê nada do que você digita: só coloca a foto na caixa de mensagem do grupo aberto."
+            }
+            btnKbdEnable.visibility = if (suportado && !teclado) View.VISIBLE else View.GONE
             // miniaturas (decodificadas fora da tela principal)
             val atuais = files.toList()
             Thread {
@@ -2006,6 +2096,16 @@ class MainActivity : AppCompatActivity() {
             }.start()
         } finally {
             photoUiBusy = false
+        }
+    }
+
+    /** Abre a tela do Android onde se ativam os teclados (o usuário liga "On Groups (foto)" uma vez). */
+    private fun openKeyboardSettings() {
+        try {
+            startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
+            Toast.makeText(this, "Ative \"On Groups (foto)\" na lista de teclados e volte ao app. O Android mostra um aviso padrão: pode aceitar.", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Não consegui abrir as configurações de teclado: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 

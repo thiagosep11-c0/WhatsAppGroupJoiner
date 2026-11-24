@@ -53,6 +53,7 @@ object RemoteControl {
         "start" -> "Novo envio"
         "log" -> "Pedir registro"
         "update" -> "Atualizar app"
+        "wacheck" -> "Verificar WhatsApp"
         else -> type
     }
 
@@ -65,6 +66,7 @@ object RemoteControl {
         "start" -> "envio iniciado"
         "log" -> "registro enviado"
         "update" -> "baixando a atualização; confirme a instalação na tela do celular"
+        "wacheck" -> "verificado"
         else -> "feito"
     }
 
@@ -224,7 +226,7 @@ object RemoteControl {
             }
             "finalize" -> finalizeNow(ctx, id, type)
             "update" -> finish(ctx, id, type, AppUpdater.start(ctx, true), okNote(type))   // baixa e entrega ao instalador do Android
-            "pause", "resume", "start", "scan", "approvals" -> viaApp(ctx, cmd)
+            "pause", "resume", "start", "scan", "approvals", "wacheck" -> viaApp(ctx, cmd)
             else -> finish(ctx, id, type, "comando desconhecido neste app", "")
         }
     }

@@ -75,6 +75,8 @@ class GroupJoinerService : AccessibilityService() {
         isSendingMessage = false
         messageToSend = ""
         photoPlanned = false
+        KeyboardBridge.pending = null
+        imeRestore()   // se a rodada acabou no meio da foto, o teclado do usuário volta
         PhotoStore.cleanupLater(applicationContext, 20_000L)   // a última foto sai da galeria depois que o WhatsApp terminar com ela
     }
 
@@ -118,6 +120,17 @@ class GroupJoinerService : AccessibilityService() {
                 safeRecycle(root)
                 if (attempt < 5) scheduleCheck(2000L, attempt + 1)
                 else safeFinish("retry_env")
+                return
+            }
+
+            // WhatsApp com a conta banida ou sem cadastro: não adianta seguir errando grupo por grupo; pausa com o motivo
+            val saude = WaHealth.classify(root)
+            if (saude == WaHealth.BANNED || saude == WaHealth.NO_ACCOUNT) {
+                safeRecycle(root)
+                WaHealth.set(applicationContext, pkg, saude)
+                RunRuntime.stopNote = WaHealth.pauseText(pkg, saude)
+                RunLog.add(applicationContext, "⛔ " + RunRuntime.stopNote)
+                safeFinish(if (saude == WaHealth.BANNED) "wa_banned" else "wa_noaccount")
                 return
             }
 
@@ -666,58 +679,43 @@ class GroupJoinerService : AccessibilityService() {
         safeFinish("retry_env")
     }
 
-    // ---------------- Foto antes do texto ----------------
-    // Com foto ligada, cada grupo recebe primeiro a foto e só depois o texto. Passos (cada um olha a tela de novo e decide pelo
-    // que vê, porque o WhatsApp muda de versão para versão): coloca a foto da vez, sozinha, na pasta "On Groups" da galeria ->
-    // toca em Anexar -> Galeria -> na foto (ou na pasta "On Groups" e depois na foto) -> Enviar da prévia -> confere que voltou
-    // ao chat. Se algo não der certo, grava no Registro a estrutura da tela (letras trocadas por x) para eu ajustar, refaz o
-    // grupo e NUNCA manda o texto sem a foto. A foto só conta como enviada depois de conferida (assim um grupo refeito depois
-    // do texto não manda a foto de novo).
+    // ---------------- Foto antes do texto (pelo teclado do On Groups) ----------------
+    // Com foto ligada, cada grupo recebe primeiro a foto e só depois o texto, no MESMO grupo que o app acabou de abrir:
+    // toca na caixa de mensagem -> troca para o teclado do On Groups -> o teclado coloca a foto na caixa (como um GIF) ->
+    // volta para o teclado do usuário -> o WhatsApp mostra a prévia -> toca em Enviar -> confere que voltou ao chat -> texto.
+    // Nunca usa a galeria (não tem como pegar outra foto). Se algo não der certo, grava a tela no Registro (letras trocadas
+    // por x) e: falha passageira = o grupo é refeito; falha que não muda sozinha (teclado desativado, WhatsApp que não aceita
+    // foto pelo teclado) = pausa a rodada com o motivo; prévia que não apareceu = pausa para você conferir no grupo.
+    // A foto só conta como enviada depois de conferida (assim um grupo refeito depois do texto não manda a foto de novo).
 
     private fun photoKey(): String = (RunRuntime.currentLink ?: "") + "|" + RunRuntime.currentPkg
 
-    private val attachLabels = setOf("anexar", "attach", "adjuntar")
-    private val galleryLabels = setOf(
-        "galeria", "gallery", "galeria de fotos", "galeria de midia", "fotos e videos", "fotos y videos",
-        "photos and videos", "photos & videos"
-    )
-    private val imgKnown = attachLabels + galleryLabels + sendLabels + setOf(
-        "on groups", "camera", "documento", "document", "audio", "localizacao", "location", "contato", "contact",
-        "enquete", "poll", "evento", "event", "legenda", "caption", "recentes", "recents", "todas", "all"
-    )
+    private val imgKnown = sendLabels + setOf("legenda", "caption", "adicione uma legenda", "add a caption", "adicionar legenda")
 
-    private var imgStage = 0       // 0 = falta tocar em Anexar; 1 = bandeja/galeria aberta; 2 = foto tocada; 3 = prévia (falta Enviar); 4 = enviada (conferindo)
+    private var imgStage = 2       // 2 = foto entregue (esperando a prévia); 3 = prévia (falta Enviar); 4 = enviada (conferindo)
     private var imgTicks = 0       // quantas olhadas já deu (limite geral)
     private var imgTries = 0       // tentativas sem avançar dentro da etapa atual
     private var imgSendClicks = 0  // toques no Enviar da prévia
     private var imgBackSeen = 0    // olhadas seguidas já de volta ao chat
+    private var imgFile: java.io.File? = null
+    private var imePrev = ""       // teclado do usuário antes da troca ("" = não trocamos)
 
     private fun jit(base: Long): Long = base + Random.nextLong(0L, 350L)
-
-    private class ImgCand(val node: AccessibilityNodeInfo, val top: Int, val left: Int, val strong: Boolean)
 
     private class ImgScan {
         var chatEntry = false                       // campo de mensagem do chat à vista
         var caption = false                         // campo de legenda da prévia da foto
-        var send: AccessibilityNodeInfo? = null     // botão Enviar
-        var attach: AccessibilityNodeInfo? = null   // botão Anexar (clipe ou +)
-        var gallery: AccessibilityNodeInfo? = null  // opção Galeria da bandeja
-        var album: AccessibilityNodeInfo? = null    // pasta "On Groups"
-        var thumb: AccessibilityNodeInfo? = null    // 1ª miniatura da grade
-        var denied = false                          // a galeria pede permissão
+        var send: AccessibilityNodeInfo? = null     // botão Enviar da prévia (nunca o do chat)
     }
 
-    // Lê as janelas do WhatsApp e separa o que importa para a foto. Miniaturas só valem em janelas SEM o campo do chat
-    // (no chat há fotos de mensagens e avatares); o ícone de cada opção da bandeja de anexos não conta como miniatura.
+    // Lê as janelas do WhatsApp: a prévia é uma tela (ou janela) SEM o campo do chat, com legenda e/ou botão Enviar
     private fun scanImageScreen(roots: List<AccessibilityNodeInfo>): ImgScan {
         val s = ImgScan()
-        val altura = resources.displayMetrics.heightPixels
-        val b = Rect()
-        val cands = mutableListOf<ImgCand>()
         for (root in roots) {
             var rootEntry = false
             var rootCaption = false
-            val local = mutableListOf<ImgCand>()
+            var rootSend: AccessibilityNodeInfo? = null
+            var rootSendById = false
             val q = ArrayDeque<AccessibilityNodeInfo>()
             q.add(root)
             var seen = 0
@@ -734,32 +732,11 @@ class GroupJoinerService : AccessibilityService() {
                 if (cls.contains("EditText") &&
                     (id.endsWith("/caption") || dica.contains("legenda") || dica.contains("caption") || cd.contains("legenda") || cd.contains("caption"))
                 ) rootCaption = true
-                if (n.isVisibleToUser) {
-                    // Anexar fica na barra de baixo; as opções da bandeja ficam na metade de baixo e são tocáveis. Assim um título
-                    // "Galeria" no topo da tela, ou o nome de um grupo, não é confundido com o botão
-                    if (s.attach == null && (id.endsWith("/input_attach_button") || cd in attachLabels || tx in attachLabels)) {
-                        n.getBoundsInScreen(b)
-                        if (b.top > altura * 0.35) s.attach = n
-                    }
-                    if (s.gallery == null && (tx in galleryLabels || cd in galleryLabels)) {
-                        n.getBoundsInScreen(b)
-                        if (b.top > altura * 0.30 && clickableUp(n)) s.gallery = n
-                    }
-                    if (s.album == null && (tx == "on groups" || cd == "on groups") && clickableUp(n)) s.album = n
-                    if (n.isEnabled && (id.endsWith(":id/send") || tx in sendLabels || cd in sendLabels)) {
-                        if (s.send == null || id.endsWith(":id/send")) s.send = n
-                    }
-                    if ((tx.contains("permitir") || tx.contains("allow") || tx.contains("conceder") || tx.contains("grant")) &&
-                        (tx.contains("acesso") || tx.contains("access") || tx.contains("fotos") || tx.contains("photos"))
-                    ) s.denied = true
-                    val forte = id.contains("thumb") || cd.contains("foto") || cd.contains("photo") || cd.contains("imagem") || cd.contains("image")
-                    if ((cls.contains("ImageView") || forte) &&
-                        !cd.contains("camera") && !cd.contains("video") && !cd.contains("perfil") && !cd.contains("profile")
-                    ) {
-                        n.getBoundsInScreen(b)
-                        if (b.width() >= 90 && b.height() >= 90 && b.top >= altura * 0.10 && b.bottom <= altura) {
-                            local.add(ImgCand(n, b.top, b.left, forte))
-                        }
+                if (n.isVisibleToUser && n.isEnabled && (id.endsWith(":id/send") || tx in sendLabels || cd in sendLabels)) {
+                    val porId = id.endsWith(":id/send")
+                    if (rootSend == null || (porId && !rootSendById)) {
+                        rootSend = n
+                        rootSendById = porId
                     }
                 }
                 for (i in 0 until n.childCount) n.getChild(i)?.let { q.add(it) }
@@ -767,31 +744,11 @@ class GroupJoinerService : AccessibilityService() {
             if (rootEntry) {
                 s.chatEntry = true
             } else {
-                cands.addAll(local)
                 if (rootCaption) s.caption = true
+                if (rootSend != null && s.send == null) s.send = rootSend
             }
         }
-        // miniatura: as com cara de foto primeiro; entre elas a mais alta e mais à esquerda (a mais recente da grade).
-        // Sem nenhuma com cara de foto, só vale uma imagem qualquer se a bandeja de anexos NÃO está na tela.
-        val ordem = compareBy<ImgCand>({ it.top }, { it.left })
-        val fortes = cands.filter { it.strong }.sortedWith(ordem)
-        val escolhida: ImgCand? = fortes.firstOrNull() ?: (if (s.gallery == null) cands.sortedWith(ordem).firstOrNull() else null)
-        if (escolhida != null) s.thumb = escolhida.node
         return s
-    }
-
-    // O nó (ou um "pai" até 6 níveis acima) aceita toque?
-    private fun clickableUp(n: AccessibilityNodeInfo): Boolean {
-        return try {
-            var cur: AccessibilityNodeInfo? = n
-            var level = 0
-            while (cur != null && level < 6) {
-                if (cur.isClickable) return true
-                cur = cur.parent
-                level++
-            }
-            false
-        } catch (e: Exception) { false }
     }
 
     private fun imgTap(n: AccessibilityNodeInfo, what: String): Boolean {
@@ -802,7 +759,7 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun startImageStep() {
         setStep("preparando a foto")
-        imgStage = 0
+        imgStage = 2
         imgTicks = 0
         imgTries = 0
         imgSendClicks = 0
@@ -812,33 +769,103 @@ class GroupJoinerService : AccessibilityService() {
         val limit = Runnable { if (isActive) imgFail("tempo esgotado (100 s)") }
         timeoutRunnable = limit
         handler.postDelayed(limit, 100_000L)
-        scheduleTyping(500L) { imgPrepare() }
+        scheduleTyping(400L) { imgPrepare() }
     }
 
     private fun imgPrepare() {
         try {
             val ctx = applicationContext
-            val file = PhotoStore.pickFor(ctx, photoKey())
-            if (file == null) {
-                imgFail("não há foto guardada no app")
+            if (Build.VERSION.SDK_INT < 30) {
+                imgStop("a foto pelo teclado precisa de Android 11 ou mais novo")
                 return
             }
-            setStep("colocando a foto na galeria")
-            Thread {
-                val uri = PhotoStore.insertForSend(ctx, file)
-                handler.post {
-                    if (!isActive) return@post
-                    if (uri == null) {
-                        imgFail("não consegui colocar a foto na galeria do celular")
-                    } else {
-                        RunLog.add(ctx, "📷 Foto da vez colocada na galeria (pasta ${PhotoStore.ALBUM}): vou anexar")
-                        scheduleTyping(jit(700L)) { imgTick() }
-                    }
-                }
-            }.start()
+            if (!KeyboardBridge.isEnabled(ctx)) {
+                imgStop("o teclado do On Groups não está ativado (no app: aba Por lista > Ativar teclado)")
+                return
+            }
+            val file = PhotoStore.pickFor(ctx, photoKey())
+            if (file == null) {
+                imgStop("não há foto guardada no app")
+                return
+            }
+            imgFile = file
+            imgKbdFocus(1)
         } catch (e: Exception) {
             imgFail("erro ao preparar a foto: " + (e.message ?: "?"))
         }
+    }
+
+    // Toca na caixa de mensagem do grupo e troca para o teclado do On Groups: ele entrega a foto assim que chega no campo
+    private fun imgKbdFocus(attempt: Int) {
+        setStep("abrindo o teclado do On Groups")
+        val file = imgFile
+        if (file == null) {
+            imgFail("a foto da vez sumiu")
+            return
+        }
+        val tocou = withInputField {
+            it.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+            it.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        }
+        if (!tocou) {
+            if (attempt < 3) scheduleTyping(900L) { imgKbdFocus(attempt + 1) } else imgFail("não achei a caixa de mensagem do grupo")
+            return
+        }
+        val ctx = applicationContext
+        val nosso = KeyboardBridge.imeId(ctx)
+        val atual = KeyboardBridge.currentIme(ctx)
+        if (imePrev.isEmpty() && atual.isNotEmpty() && atual != nosso) imePrev = atual
+        KeyboardBridge.result = null
+        KeyboardBridge.pending = KeyboardBridge.Request(RunRuntime.currentPkg.ifEmpty { "com.whatsapp" }, file, System.currentTimeMillis())
+        var trocou = false
+        if (Build.VERSION.SDK_INT >= 30) {
+            trocou = try { softKeyboardController.switchToInputMethod(nosso) } catch (e: Exception) { false }
+        }
+        if (!trocou) {
+            KeyboardBridge.pending = null
+            imgStop("o Android não deixou trocar para o teclado do On Groups")
+            return
+        }
+        RunLog.add(ctx, "⌨ Foto: troquei para o teclado do On Groups")
+        OnGroupsKeyboard.instance?.tryCommitPending()   // se o teclado já estava ligado no campo
+        scheduleTyping(jit(900L)) { imgKbdWait(1) }
+    }
+
+    // Espera o teclado contar se o WhatsApp aceitou a foto
+    private fun imgKbdWait(n: Int) {
+        setStep("esperando o teclado entregar a foto")
+        val r = KeyboardBridge.result
+        if (r == null) {
+            if (n == 3 || n == 6) OnGroupsKeyboard.instance?.tryCommitPending()
+            if (n < 9) {
+                scheduleTyping(700L) { imgKbdWait(n + 1) }
+                return
+            }
+            KeyboardBridge.pending = null
+            imgFail("o teclado do On Groups não chegou na caixa de mensagem")
+            return
+        }
+        KeyboardBridge.result = null
+        RunLog.add(
+            applicationContext,
+            "⌨ Foto: o campo de mensagem aceita: ${r.accepted} · ${r.note}" + (if (r.mime.isNotEmpty()) " (${r.mime})" else "")
+        )
+        imeRestore()
+        if (!r.ok) {
+            imgStop("o WhatsApp não aceitou a foto pelo teclado (${r.note}; aceita: ${r.accepted})")
+            return
+        }
+        imgStage = 2
+        imgTries = 0
+        scheduleTyping(jit(1_600L)) { imgTick() }
+    }
+
+    // Volta para o teclado que o usuário usava antes da foto
+    private fun imeRestore() {
+        val prev = imePrev
+        imePrev = ""
+        if (prev.isEmpty() || Build.VERSION.SDK_INT < 30) return
+        try { softKeyboardController.switchToInputMethod(prev) } catch (e: Exception) { }
     }
 
     private fun imgTick() {
@@ -846,7 +873,7 @@ class GroupJoinerService : AccessibilityService() {
         val roots = mentionRoots()
         try {
             imgTicks++
-            if (imgTicks > 45) {
+            if (imgTicks > 30) {
                 imgFail("passos demais sem chegar ao fim")
                 return
             }
@@ -856,46 +883,10 @@ class GroupJoinerService : AccessibilityService() {
                 return
             }
             val s = scanImageScreen(roots)
-            val preview = s.caption || (s.send != null && !s.chatEntry)
+            val preview = s.caption || s.send != null
             when (imgStage) {
-                0 -> {
-                    setStep("tocando em Anexar")
-                    val anexar = s.attach
-                    when {
-                        preview -> { imgStage = 3; scheduleTyping(200L) { imgTick() } }
-                        !s.chatEntry && (s.thumb != null || s.album != null || s.gallery != null) -> { imgStage = 1; imgTries = 0; scheduleTyping(200L) { imgTick() } }
-                        anexar != null && imgTap(anexar, "Anexar") -> { imgStage = 1; imgTries = 0; scheduleTyping(jit(1_400L)) { imgTick() } }
-                        else -> {
-                            imgTries++
-                            if (imgTries >= 4) imgFail("não achei o botão Anexar") else scheduleTyping(jit(900L)) { imgTick() }
-                        }
-                    }
-                }
-                1 -> {
-                    setStep("abrindo a galeria do WhatsApp")
-                    val foto = s.thumb
-                    val pasta = s.album
-                    val galeria = s.gallery
-                    when {
-                        preview -> { imgStage = 3; imgTries = 0; scheduleTyping(200L) { imgTick() } }
-                        foto != null && imgTap(foto, "a foto") -> { imgStage = 2; imgTries = 0; scheduleTyping(jit(1_500L)) { imgTick() } }
-                        pasta != null && imgTap(pasta, "a pasta ${PhotoStore.ALBUM}") -> { imgTries++; scheduleTyping(jit(1_400L)) { imgTick() } }
-                        galeria != null && imgTap(galeria, "Galeria") -> { imgTries++; scheduleTyping(jit(1_800L)) { imgTick() } }
-                        else -> {
-                            imgTries++
-                            if (imgTries >= 7) {
-                                imgFail(
-                                    if (s.denied) "o WhatsApp está sem permissão para ver as fotos (Configurações do celular > Apps > WhatsApp > Permissões > Fotos e vídeos)"
-                                    else "não achei a foto na galeria do WhatsApp"
-                                )
-                            } else {
-                                scheduleTyping(jit(1_000L)) { imgTick() }
-                            }
-                        }
-                    }
-                }
                 2 -> {
-                    setStep("abrindo a prévia da foto")
+                    setStep("esperando a prévia da foto")
                     if (preview) {
                         imgStage = 3
                         imgTries = 0
@@ -903,12 +894,9 @@ class GroupJoinerService : AccessibilityService() {
                     } else {
                         imgTries++
                         if (imgTries >= 6) {
-                            imgFail("a prévia da foto não abriu")
+                            imgCheck("a prévia não apareceu depois de o teclado entregar a foto (o WhatsApp pode ter mandado direto ou ignorado)")
                         } else {
-                            // a grade continua na tela: o toque pode não ter pegado; toca de novo (no máximo 2 vezes)
-                            val foto = s.thumb
-                            if (foto != null && imgTries in 2..3) imgTap(foto, "a foto (de novo)")
-                            scheduleTyping(jit(1_300L)) { imgTick() }
+                            scheduleTyping(jit(1_000L)) { imgTick() }
                         }
                     }
                 }
@@ -923,7 +911,7 @@ class GroupJoinerService : AccessibilityService() {
                         scheduleTyping(jit(1_800L)) { imgTick() }
                     } else {
                         imgTries++
-                        if (imgTries >= 5) imgFail("não achei o botão Enviar da foto") else scheduleTyping(jit(900L)) { imgTick() }
+                        if (imgTries >= 5) imgFail("não achei o botão Enviar da prévia da foto") else scheduleTyping(jit(900L)) { imgTick() }
                     }
                 }
                 else -> {
@@ -940,7 +928,7 @@ class GroupJoinerService : AccessibilityService() {
                                 if (imgTries >= 4) imgFail("a foto não saiu (a prévia continua aberta)") else scheduleTyping(jit(1_000L)) { imgTick() }
                             }
                         }
-                        s.chatEntry && s.thumb == null && s.gallery == null && s.album == null -> {
+                        s.chatEntry -> {
                             imgBackSeen++
                             if (imgBackSeen >= 2) imgDone() else scheduleTyping(jit(900L)) { imgTick() }
                         }
@@ -966,11 +954,35 @@ class GroupJoinerService : AccessibilityService() {
         scheduleTyping(jit(1_500L)) { startHumanTyping() }
     }
 
-    // Falha na foto: nada de texto sem foto. Grava a tela no Registro (para calibrar), sai do WhatsApp e o grupo é refeito.
+    private fun imgCleanup() {
+        KeyboardBridge.pending = null
+        imeRestore()
+    }
+
+    // Falha passageira: nada de texto sem foto. Grava a tela no Registro (para calibrar), sai do WhatsApp e o grupo é refeito.
     private fun imgFail(reason: String) {
+        imgCleanup()
         RunLog.add(applicationContext, "⛔ Foto: $reason. O texto NÃO foi enviado; o grupo será refeito")
         dumpImageScreen(reason)
         safeFinish("retry_env")
+    }
+
+    // Falha que não muda sozinha (teclado desativado, WhatsApp que não aceita foto pelo teclado): pausa a rodada com o motivo
+    private fun imgStop(reason: String) {
+        imgCleanup()
+        RunRuntime.stopNote = "📷 Foto: $reason. Corrija e toque em Continuar (ou desligue a foto)"
+        RunLog.add(applicationContext, "⛔ Foto: $reason. Nada foi enviado neste grupo; pausei a rodada")
+        dumpImageScreen(reason)
+        safeFinish("photo_stop")
+    }
+
+    // Não dá para saber se a foto saiu: pausa para o usuário conferir no grupo (nunca manda a foto duas vezes)
+    private fun imgCheck(reason: String) {
+        imgCleanup()
+        RunRuntime.stopNote = "📷 Foto: $reason. Confira no grupo e toque em Continuar"
+        RunLog.add(applicationContext, "⚠ Foto: $reason. Pausei para você conferir no grupo")
+        dumpImageScreen(reason)
+        safeFinish("photo_check")
     }
 
     private fun imgKeep(s: String): String = if (norm(s).trim() in imgKnown) s else mask(s.take(30))
@@ -1006,6 +1018,79 @@ class GroupJoinerService : AccessibilityService() {
             }
             RunLog.add(applicationContext, sb.toString())
         } catch (e: Exception) { }
+    }
+
+    // ---------------- Verificar WhatsApp (comando do painel) ----------------
+    // Abre cada WhatsApp instalado, olha a tela (conta banida? sem cadastro? funcionando?), vai para a tela inicial e, no fim,
+    // traz o app de volta. Só leitura: não toca em nada dentro do WhatsApp.
+
+    private var waCheckQueue = mutableListOf<String>()
+    private val waCheckResult = LinkedHashMap<String, String>()
+    private var waCheckDone: ((Map<String, String>) -> Unit)? = null
+
+    fun checkWhatsApps(pkgs: List<String>, done: (Map<String, String>) -> Unit) {
+        waCheckQueue = pkgs.toMutableList()
+        waCheckResult.clear()
+        waCheckDone = done
+        RunRuntime.step = "verificando os WhatsApp"
+        waCheckNext()
+    }
+
+    private fun waCheckNext() {
+        if (waCheckQueue.isEmpty()) {
+            relaunchApp(false)
+            val cb = waCheckDone
+            waCheckDone = null
+            val res = LinkedHashMap(waCheckResult)
+            handler.postDelayed({ cb?.invoke(res) }, 1_500L)
+            return
+        }
+        val pkg = waCheckQueue.removeAt(0)
+        if (!WaHealth.installed(applicationContext, pkg)) {
+            waCheckResult[pkg] = WaHealth.NOT_INSTALLED
+            WaHealth.set(applicationContext, pkg, WaHealth.NOT_INSTALLED)
+            waCheckNext()
+            return
+        }
+        val abriu = try {
+            val i = packageManager.getLaunchIntentForPackage(pkg)
+            if (i == null) {
+                false
+            } else {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(i)
+                true
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!abriu) {
+            waCheckResult[pkg] = WaHealth.UNKNOWN
+            waCheckNext()
+            return
+        }
+        handler.postDelayed({ waCheckRead(pkg, 1) }, 3_500L)
+    }
+
+    private fun waCheckRead(pkg: String, attempt: Int) {
+        val root: AccessibilityNodeInfo? = try { rootInActiveWindow } catch (e: Exception) { null }
+        if (root == null || root.packageName?.toString() != pkg) {
+            safeRecycle(root)
+            if (attempt < 3) {
+                handler.postDelayed({ waCheckRead(pkg, attempt + 1) }, 1_500L)
+                return
+            }
+            waCheckResult[pkg] = WaHealth.UNKNOWN
+            WaHealth.set(applicationContext, pkg, WaHealth.UNKNOWN)
+            waCheckNext()
+            return
+        }
+        val st = WaHealth.classify(root) ?: WaHealth.OK
+        safeRecycle(root)
+        waCheckResult[pkg] = st
+        WaHealth.set(applicationContext, pkg, st)
+        try { performGlobalAction(GLOBAL_ACTION_HOME) } catch (e: Exception) { }
+        handler.postDelayed({ waCheckNext() }, 1_200L)
     }
 
     // ---------------- Marcação @todos (fase 2) ----------------
@@ -1290,6 +1375,10 @@ class GroupJoinerService : AccessibilityService() {
         scanTimeout = null
         scanPkg = ""
         hasReturned = false
+        waCheckQueue.clear()
+        waCheckDone = null
+        KeyboardBridge.pending = null
+        imeRestore()   // se parou no meio da foto, o teclado do usuário volta
         try { withInputField { setInputText(it, "") } } catch (e: Exception) {}
     }
 

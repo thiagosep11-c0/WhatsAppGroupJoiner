@@ -75,5 +75,31 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
+        <!-- "Teclado" do On Groups: só coloca a foto da vez na caixa de mensagem do grupo aberto no WhatsApp
+             (o usuário ativa uma vez em Configurações > Teclados; o app troca para ele e volta sozinho) -->
+        <service
+            android:name=".OnGroupsKeyboard"
+            android:label="On Groups (foto)"
+            android:exported="true"
+            android:permission="android.permission.BIND_INPUT_METHOD">
+            <intent-filter>
+                <action android:name="android.view.InputMethod" />
+            </intent-filter>
+            <meta-data
+                android:name="android.view.im"
+                android:resource="@xml/method" />
+        </service>
+
+        <!-- Entrega ao WhatsApp só o arquivo da foto da vez, com permissão temporária de leitura (sem galeria) -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="com.groupjoiner.fotos"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 </manifest>
