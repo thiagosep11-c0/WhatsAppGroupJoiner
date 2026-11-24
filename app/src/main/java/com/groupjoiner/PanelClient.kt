@@ -30,9 +30,9 @@ object PanelClient {
     private const val K_TOKEN = "token"
     private const val K_NAME = "name"
     private const val K_LAST_RUN = "last_run"
-    // 3 = foto pelo teclado do On Groups, mensagens intercaladas, estado dos WhatsApp e "Verificar WhatsApp"
-    // (2 era a foto pela galeria, que não funcionou; o painel só manda o que o app avisa que sabe fazer)
-    const val FEATURE_LEVEL = 3
+    // 4 = texto como legenda da foto; 3 = foto pelo teclado do On Groups, mensagens intercaladas, estado dos WhatsApp e
+    // "Verificar WhatsApp" (2 era a foto pela galeria, que não funcionou; o painel só manda o que o app avisa que sabe fazer)
+    const val FEATURE_LEVEL = 4
     private const val MIN_GAP_MS = 6_000L     // sinais comuns: no máximo um a cada 6 s
     private const val FORCED_GAP_MS = 1_500L  // sinais importantes (fim de rodada, app aberto): no máximo um a cada 1,5 s
 

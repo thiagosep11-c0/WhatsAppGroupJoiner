@@ -23,6 +23,8 @@ class GroupJoinerService : AccessibilityService() {
     private var isCheckingApproval = false
     private var messageToSend = ""
     private var photoPlanned = false   // esta fase manda uma foto antes do texto em cada grupo
+    private var captionMode = false    // o texto vai como legenda da foto (escrito na prévia, antes de tocar em Enviar)
+    private var captionPending = false // a legenda está sendo escrita: quando tocar em Enviar, a foto também conta como enviada
     private var humanTyping = true
     private var typingWpm = 70
     private var hasReturned = false
@@ -51,6 +53,7 @@ class GroupJoinerService : AccessibilityService() {
         cancelAll()
         if (waiting) {
             activeSeq = RunRuntime.groupSeq
+            captionPending = false        // grupo novo: nenhuma legenda em andamento
             RunRuntime.mentionNote = ""   // grupo novo: a marcação @todos começa do zero
             RunRuntime.step = "esperando o WhatsApp abrir o grupo"
             mentionTried = false
@@ -62,19 +65,23 @@ class GroupJoinerService : AccessibilityService() {
         }
     }
 
-    // human = digitar palavra por palavra (como gente); wpm = palavras por minuto; photo = mandar uma foto antes do texto em cada grupo
-    fun setMessageMode(message: String, human: Boolean = true, wpm: Int = 70, photo: Boolean = false) {
+    // human = digitar palavra por palavra (como gente); wpm = palavras por minuto; photo = mandar uma foto em cada grupo;
+    // caption = o texto vai como LEGENDA da foto (uma mensagem só); sem caption o texto vai logo depois da foto
+    fun setMessageMode(message: String, human: Boolean = true, wpm: Int = 70, photo: Boolean = false, caption: Boolean = false) {
         isSendingMessage = true
         messageToSend = message
         humanTyping = human
         typingWpm = wpm
         photoPlanned = photo
+        captionMode = caption
     }
 
     fun clearMessageMode() {
         isSendingMessage = false
         messageToSend = ""
         photoPlanned = false
+        captionMode = false
+        captionPending = false
         KeyboardBridge.pending = null
         imeRestore()   // se a rodada acabou no meio da foto, o teclado do usuário volta
         PhotoStore.cleanupLater(applicationContext, 20_000L)   // a última foto sai da galeria depois que o WhatsApp terminar com ela
@@ -901,6 +908,15 @@ class GroupJoinerService : AccessibilityService() {
                     }
                 }
                 3 -> {
+                    if (captionMode && messageToSend.isNotBlank()) {
+                        // legenda: o texto é escrito no campo de legenda da prévia (os mesmos passos conferidos do texto:
+                        // digita, confere que está igual, toca no Enviar da prévia e confere que saiu); a foto vai junto
+                        setStep("escrevendo a legenda da foto")
+                        captionPending = true
+                        RunLog.add(applicationContext, "📝 Foto: escrevendo o texto como legenda")
+                        scheduleTyping(jit(700L)) { startHumanTyping() }
+                        return
+                    }
                     setStep("tocando em Enviar (foto)")
                     val enviar = s.send
                     if (enviar != null && imgTap(enviar, "Enviar a foto")) {
@@ -1746,6 +1762,12 @@ class GroupJoinerService : AccessibilityService() {
         val link = RunRuntime.currentLink ?: return
         val pkg = RunRuntime.currentPkg.ifEmpty { "com.whatsapp" }
         try { StorageManager.markSent(applicationContext, link, pkg) } catch (e: Exception) {}
+        // legenda: o toque em Enviar da prévia leva a foto junto (o rodízio anda e o grupo não recebe a foto de novo)
+        if (captionPending) {
+            captionPending = false
+            try { PhotoStore.commitSent(applicationContext, photoKey()) } catch (e: Exception) {}
+            RunLog.add(applicationContext, "📷 Foto com o texto na legenda: toquei em Enviar")
+        }
     }
 
     // Sai do chat com segurança (só aperta Voltar com o WhatsApp na frente, conferindo), volta ao app e informa o resultado

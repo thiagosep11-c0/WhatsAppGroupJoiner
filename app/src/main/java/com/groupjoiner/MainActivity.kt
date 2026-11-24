@@ -156,6 +156,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvPhotoInfo: TextView
     private lateinit var tvPhotoHomeInfo: TextView
     private lateinit var tvKbdInfo: TextView
+    private lateinit var switchPhotoCaption: Switch
     private lateinit var btnKbdEnable: Button
     private var photoUiBusy = false     // true enquanto a tela das fotos está sendo desenhada (os botões não reagem)
     private val pickPhotos = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris -> onPhotosPicked(uris) }
@@ -346,6 +347,7 @@ class MainActivity : AppCompatActivity() {
         tvPhotoInfo     = findViewById(R.id.tvPhotoInfo)
         tvPhotoHomeInfo = findViewById(R.id.tvPhotoHomeInfo)
         tvKbdInfo       = findViewById(R.id.tvKbdInfo)
+        switchPhotoCaption = findViewById(R.id.switchPhotoCaption)
         btnKbdEnable    = findViewById(R.id.btnKbdEnable)
         etMaxUnread     = findViewById(R.id.etMaxUnread)
         btnScan         = findViewById(R.id.btnScan)
@@ -554,6 +556,12 @@ class MainActivity : AppCompatActivity() {
         // --- Fotos antes do texto ---
         btnPhotoPick.setOnClickListener { choosePhotos() }
         btnKbdEnable.setOnClickListener { openKeyboardSettings() }
+        switchPhotoCaption.setOnCheckedChangeListener { _, marcado ->
+            if (!photoUiBusy) {
+                PhotoStore.setCaption(this, marcado)
+                refreshPhotoUi()
+            }
+        }
         btnPhotoClear.setOnClickListener { askClearPhotos() }
         switchPhotos.setOnCheckedChangeListener { _, marcado -> onPhotoSwitch(marcado) }
         radioPhotoRot.setOnCheckedChangeListener { _, id ->
@@ -866,6 +874,7 @@ class MainActivity : AppCompatActivity() {
         val message = if (varias.size > 1) MessageVariants.join(varias) else payload.optString("message", "").trim()
         if (varias.size > 1) MessageVariants.resetRotation(this)
         if (params.has("rot")) PhotoStore.setMode(this, if (params.optString("rot") == "rnd") "rnd" else "seq")
+        if (params.has("caption")) PhotoStore.setCaption(this, params.optBoolean("caption", true))
         val entrar = params.optString("mode", "messages") == "join"
         val business = params.optString("wa", "normal") == "business"
         if (!entrar && message.isEmpty()) return "a mensagem veio vazia"
@@ -1102,7 +1111,7 @@ class MainActivity : AppCompatActivity() {
                 // mensagens intercaladas (separadas por ---): cada grupo recebe uma; grupo refeito recebe a mesma
                 val chave = (linkList.getOrNull(currentIndex) ?: "") + "|" + selectedPackage
                 val msg = MessageVariants.pickFor(this, chave, runMessage)
-                svc.setMessageMode(msg, switchHumanTyping.isChecked, readTypingWpm(), PhotoStore.isActive(this))
+                svc.setMessageMode(msg, switchHumanTyping.isChecked, readTypingWpm(), PhotoStore.isActive(this), PhotoStore.captionOn(this))
             }
             Phase.APPROVAL -> {
                 svc.clearMessageMode()
@@ -2008,7 +2017,8 @@ class MainActivity : AppCompatActivity() {
         val primeira = variantes.firstOrNull() ?: msg
         val previa = if (primeira.length > 120) primeira.take(120) + "…" else primeira
         val fotos = if (PhotoStore.isActive(this)) {
-            "Foto antes do texto: ${PhotoStore.count(this)} ${if (PhotoStore.count(this) == 1) "foto" else "fotos"}, ${PhotoStore.modeText(this)}." +
+            (if (PhotoStore.captionOn(this)) "Foto com o texto na legenda: " else "Foto antes do texto: ") +
+                "${PhotoStore.count(this)} ${if (PhotoStore.count(this) == 1) "foto" else "fotos"}, ${PhotoStore.modeText(this)}." +
                 (if (KeyboardBridge.isEnabled(this)) "" else " ⚠ O teclado do On Groups está DESATIVADO: a rodada vai pausar na foto.") + "\n\n"
         } else ""
         val intercaladas = if (variantes.size > 1) "Mensagens intercaladas: ${variantes.size}, ${PhotoStore.modeText(this)}.\n\n" else ""
@@ -2057,11 +2067,15 @@ class MainActivity : AppCompatActivity() {
             radioPhotoSeq.isEnabled = suportado
             radioPhotoRnd.isEnabled = suportado
             if (PhotoStore.mode(this) == "rnd") radioPhotoRnd.isChecked = true else radioPhotoSeq.isChecked = true
+            switchPhotoCaption.isEnabled = suportado
+            switchPhotoCaption.isChecked = PhotoStore.captionOn(this)
             val palavra = if (files.size == 1) "foto" else "fotos"
             tvPhotoInfo.text = when {
                 !suportado -> "A foto antes do texto precisa de Android 10 ou mais novo (este celular tem Android ${Build.VERSION.RELEASE}). Fica desligada."
                 files.isEmpty() -> "Nenhuma foto escolhida: sem foto, só o texto é enviado."
-                else -> "${files.size} de ${PhotoStore.MAX} fotos, ${PhotoStore.modeText(this)}. Cada grupo recebe uma foto e, logo depois, o texto. Toque numa foto para tirar da lista."
+                else -> "${files.size} de ${PhotoStore.MAX} fotos, ${PhotoStore.modeText(this)}. " +
+                    (if (PhotoStore.captionOn(this)) "Cada grupo recebe uma foto com o texto na legenda (uma mensagem só)." else "Cada grupo recebe uma foto e, logo depois, o texto.") +
+                    " Toque numa foto para tirar da lista."
             }
             val teclado = suportado && KeyboardBridge.isEnabled(this)
             tvPhotoHomeInfo.text = when {

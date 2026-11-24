@@ -89,6 +89,13 @@ object PhotoStore {
         StorageManager.setPref(ctx, K_ROT, if (m == "rnd") "rnd" else "seq")
     }
 
+    /** O texto vai como LEGENDA da foto (uma mensagem só). Vem ligado: foi o jeito que o usuário pediu. */
+    fun captionOn(ctx: Context): Boolean = StorageManager.getPref(ctx, "photos_caption", "1") == "1"
+
+    fun setCaption(ctx: Context, on: Boolean) {
+        StorageManager.setPref(ctx, "photos_caption", if (on) "1" else "0")
+    }
+
     /** Vai mandar foto nesta rodada? (ligado, com ao menos uma foto e num Android que deixa). */
     fun isActive(ctx: Context): Boolean = supported() && isOn(ctx) && count(ctx) > 0
 
