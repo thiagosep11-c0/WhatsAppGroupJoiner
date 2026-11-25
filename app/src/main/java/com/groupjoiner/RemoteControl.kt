@@ -55,6 +55,8 @@ object RemoteControl {
         "update" -> "Atualizar app"
         "wacheck" -> "Verificar WhatsApp"
         "switchwa" -> "Trocar WhatsApp"
+        "msgget" -> "Ler a mensagem"
+        "setmsg" -> "Trocar a mensagem"
         else -> type
     }
 
@@ -68,6 +70,8 @@ object RemoteControl {
         "log" -> "registro enviado"
         "update" -> "baixando a atualização; confirme a instalação na tela do celular"
         "wacheck" -> "verificado"
+        "msgget" -> "mensagem lida"
+        "setmsg" -> "mensagem trocada: vale a partir do próximo grupo"
         else -> "feito"
     }
 
@@ -105,10 +109,13 @@ object RemoteControl {
         return try { JSONArray((prefs(ctx).getString(K_ACKS, "[]") ?: "[]")) } catch (e: Exception) { JSONArray() }
     }
 
-    private fun addAck(ctx: Context, id: String, ok: Boolean, note: String) {
+    // [data]: só no "ler a mensagem" (msgget) — a mensagem do envio vai ao painel, que guarda cifrada e mostra uma vez
+    private fun addAck(ctx: Context, id: String, ok: Boolean, note: String, data: String? = null) {
         synchronized(this) {
             val a = pendingAcks(ctx)
-            a.put(JSONObject().put("id", id).put("ok", ok).put("note", note.take(180)))
+            val o = JSONObject().put("id", id).put("ok", ok).put("note", note.take(180))
+            if (data != null) o.put("data", data.take(42_000))
+            a.put(o)
             val keep = JSONArray()
             val start = if (a.length() > 30) a.length() - 30 else 0
             for (i in start until a.length()) keep.put(a.get(i))
@@ -131,11 +138,11 @@ object RemoteControl {
     }
 
     /** Encerra um comando: [error] null = deu certo. A resposta vai ao painel no próximo sinal (que sai já). */
-    fun finish(ctx: Context, id: String, type: String, error: String?, okNote: String) {
+    fun finish(ctx: Context, id: String, type: String, error: String?, okNote: String, data: String? = null) {
         val app = ctx.applicationContext
         val ok = error == null
         val note = error ?: okNote
-        addAck(app, id, ok, note)
+        addAck(app, id, ok, note, if (ok) data else null)
         val text = typeName(type) + ": " + (if (ok) "feito" else "não feito ($note)")
         prefs(app).edit().putString(K_LAST, "$text · ${hora()}").apply()
         RunLog.add(app, "☁ Painel: $text")
@@ -228,9 +235,46 @@ object RemoteControl {
             "finalize" -> finalizeNow(ctx, id, type)
             "update" -> finish(ctx, id, type, AppUpdater.start(ctx, true), okNote(type))   // baixa e entrega ao instalador do Android
             "switchwa" -> switchWa(ctx, id, type, cmd)   // troca o WhatsApp do envio sem trazer o app para a frente (não atrapalha o grupo aberto)
+            "msgget" -> readMessage(ctx, id, type)        // a mensagem do envio em andamento (para o Editar mensagem do painel)
+            "setmsg" -> setMessage(ctx, id, type, cmd)    // mensagem nova: vale a partir do próximo grupo (não atrapalha o grupo aberto)
             "pause", "resume", "start", "scan", "approvals", "wacheck" -> viaApp(ctx, cmd)
             else -> finish(ctx, id, type, "comando desconhecido neste app", "")
         }
+    }
+
+    /** Painel: ler a mensagem que o envio em andamento está usando (vai na resposta, só uma vez). */
+    private fun readMessage(ctx: Context, id: String, type: String) {
+        val act = MainActivity.instance
+        // com a tela do app fechada, o retrato salvo do envio tem a mesma mensagem
+        val texto: String? = if (act != null) act.remoteCurrentMessage() else StorageManager.loadRun(ctx)?.takeIf { it.active }?.message
+        when {
+            texto == null -> finish(ctx, id, type, "não há envio com mensagem em andamento neste celular", "")
+            texto.isEmpty() -> finish(ctx, id, type, "este envio só entra nos grupos (sem mensagem)", "")
+            else -> finish(ctx, id, type, null, okNote(type), texto)
+        }
+    }
+
+    /** Painel: trocar a mensagem do envio em andamento. O grupo aberto agora termina com a antiga; do próximo em diante vale a nova. */
+    private fun setMessage(ctx: Context, id: String, type: String, cmd: JSONObject) {
+        val texto = cmd.optJSONObject("payload")?.optString("message", "")?.trim().orEmpty()
+        if (texto.isEmpty()) {
+            finish(ctx, id, type, "a mensagem veio vazia", "")
+            return
+        }
+        val act = MainActivity.instance
+        if (act != null) {
+            finish(ctx, id, type, act.remoteSetMessage(texto), okNote(type))
+            return
+        }
+        // a tela do app não existe agora: grava no retrato salvo do envio (o app continua com ela quando reabrir)
+        val snap = StorageManager.loadRun(ctx)
+        if (snap == null || !snap.active || snap.message.isEmpty()) {
+            finish(ctx, id, type, "não há envio com mensagem em andamento neste celular", "")
+            return
+        }
+        StorageManager.saveRun(ctx, snap.copy(message = texto))
+        RunLog.add(ctx, "☁ Painel: mensagem trocada (vale a partir do próximo grupo)")
+        finish(ctx, id, type, null, okNote(type))
     }
 
     /** Painel: trocar o WhatsApp do envio (vale a partir do próximo grupo; o grupo aberto agora termina no WhatsApp atual). */

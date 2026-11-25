@@ -56,6 +56,11 @@
             android:layout_height="wrap_content" android:layout_weight="1"
             android:text="" android:textSize="12sp" android:textColor="#B71C1C"
             android:maxLines="3"/>
+        <!-- Editar a mensagem do envio em andamento (vale a partir do próximo grupo); só aparece em envio com mensagem -->
+        <Button android:id="@+id/btnBannerMsg" android:layout_width="wrap_content"
+            android:layout_height="42dp" android:minWidth="0dp"
+            android:text="✏ Mensagem" android:textSize="13sp"
+            android:layout_marginStart="8dp" android:visibility="gone"/>
         <Button android:id="@+id/btnBannerStop" android:layout_width="wrap_content"
             android:layout_height="42dp" android:minWidth="0dp"
             android:text="⏹ Finalizar" android:backgroundTint="#D32F2F"

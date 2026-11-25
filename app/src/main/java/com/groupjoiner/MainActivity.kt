@@ -41,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var runBanner: View
     private lateinit var tvBannerStatus: TextView
     private lateinit var btnBannerStop: Button
+    private lateinit var btnBannerMsg: Button
     private lateinit var btnRetry: Button
     private lateinit var btnPermission: Button
     private lateinit var btnEditLinks: Button
@@ -302,6 +303,7 @@ class MainActivity : AppCompatActivity() {
         runBanner       = findViewById(R.id.runBanner)
         tvBannerStatus  = findViewById(R.id.tvBannerStatus)
         btnBannerStop   = findViewById(R.id.btnBannerStop)
+        btnBannerMsg    = findViewById(R.id.btnBannerMsg)
         btnRetry        = findViewById(R.id.btnRetry)
         btnPermission   = findViewById(R.id.btnPermission)
         btnEditLinks    = findViewById(R.id.btnEditLinks)
@@ -482,6 +484,8 @@ class MainActivity : AppCompatActivity() {
 
         // Finalizar (faixa vermelha, visível em todas as abas): pede confirmação e encerra o que estiver em andamento
         btnBannerStop.setOnClickListener { confirmFinalize() }
+        // Editar a mensagem do envio em andamento (vale a partir do próximo grupo)
+        btnBannerMsg.setOnClickListener { openEditMessageDialog() }
 
         btnRetry.setOnClickListener {
             if (failedLinks.isEmpty()) { Toast.makeText(this, "Nenhuma falha!", Toast.LENGTH_SHORT).show(); return@setOnClickListener }
@@ -1751,7 +1755,92 @@ class MainActivity : AppCompatActivity() {
             val busy = isRunning || runActive || scanInProgress
             if (busy) tvBannerStatus.text = busyDescription()
             runBanner.visibility = if (busy) View.VISIBLE else View.GONE
+            btnBannerMsg.visibility = if (busy && remoteCurrentMessage().let { it != null && it.isNotEmpty() }) View.VISIBLE else View.GONE
         }
+    }
+
+    /**
+     * A mensagem que o envio em andamento está usando (com as intercaladas separadas por ---). null = não há envio com
+     * mensagem agora (nada rodando, escaneando, verificando aprovados); "" = o envio só entra nos grupos, sem mensagem.
+     */
+    fun remoteCurrentMessage(): String? {
+        if (!(isRunning || runActive) || scanInProgress) return null
+        return when (phase) {
+            Phase.MESSAGES -> runMessage
+            Phase.JOIN -> if (switchSendMessage.isChecked) etMessage.text.toString().trim() else ""
+            else -> null
+        }
+    }
+
+    /** Painel: trocar a mensagem do envio em andamento. Devolve null se deu certo ou o motivo. */
+    fun remoteSetMessage(text: String): String? = applyEditedMessage(text, "☁ Painel")
+
+    /**
+     * Troca a mensagem do envio em andamento (painel ou botão "✏ Mensagem"). O grupo que está no meio termina com a antiga
+     * (o serviço já está com ela); do próximo grupo em diante vale a nova. Na entrada nos grupos, vale para as mensagens
+     * que saem depois de entrar.
+     */
+    private fun applyEditedMessage(text: String, origem: String): String? {
+        val atual = remoteCurrentMessage() ?: return "não há envio com mensagem em andamento neste celular"
+        if (phase == Phase.JOIN && !switchSendMessage.isChecked) return "este envio só entra nos grupos (sem mensagem)"
+        val nova = text.replace("\r\n", "\n").trim()
+        val partes = MessageVariants.split(nova)
+        if (partes.isEmpty()) return "a mensagem veio vazia"
+        if (partes.size > 10) return "no máximo 10 mensagens intercaladas"
+        if (partes.any { it.length > 4000 }) return "cada mensagem pode ter no máximo 4000 caracteres"
+        if (nova == atual) return null
+        val antes = MessageVariants.split(atual).size
+        // a caixa de onde o envio saiu passa a mostrar a mensagem nova (a da entrada é a que vale para as mensagens depois)
+        if (phase == Phase.JOIN || etMessage.text.toString().trim() == atual) etMessage.setText(nova)
+        if (etMsgOnly.text.toString().trim() == atual) etMsgOnly.setText(nova)
+        // runMessage vai para o retrato salvo a cada passo: na entrada ele guarda a mensagem das mensagens depois de entrar
+        runMessage = nova
+        lastRunMessage = nova
+        if (partes.size != antes) MessageVariants.resetRotation(this)   // outra quantidade de intercaladas: o rodízio recomeça
+        saveSavedSettings()
+        // o retrato salvo do envio também leva a mensagem nova (se o app reabrir, continua com ela)
+        StorageManager.loadRun(this)?.let { if (it.active) StorageManager.saveRun(this, it.copy(message = nova)) }
+        RunLog.add(
+            this,
+            "$origem: mensagem trocada (" + (if (partes.size > 1) "${partes.size} intercaladas" else "${nova.length} caracteres") +
+                "). Vale a partir do próximo grupo"
+        )
+        updateRunBanner()
+        return null
+    }
+
+    /** Botão "✏ Mensagem" da faixa: mostra a mensagem do envio em andamento para editar (vale a partir do próximo grupo). */
+    private fun openEditMessageDialog() {
+        val atual = remoteCurrentMessage()
+        if (atual.isNullOrEmpty()) {
+            Toast.makeText(this, "Não há envio com mensagem em andamento.", Toast.LENGTH_SHORT).show()
+            updateRunBanner()
+            return
+        }
+        val campo = EditText(this)
+        campo.setText(atual)
+        campo.minLines = 6
+        campo.maxLines = 14
+        campo.gravity = android.view.Gravity.TOP or android.view.Gravity.START
+        campo.inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+            android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+        val pad = (16 * resources.displayMetrics.density).toInt()
+        val box = FrameLayout(this)
+        box.setPadding(pad, pad / 2, pad, 0)
+        box.addView(campo)
+        AlertDialog.Builder(this)
+            .setTitle("Editar mensagem do envio")
+            .setMessage(
+                "Vale a partir do próximo grupo (o grupo que está no meio termina com a mensagem antiga). " +
+                    "Para intercalar, separe as mensagens com uma linha só com ---."
+            )
+            .setView(box)
+            .setPositiveButton("Salvar") { _, _ ->
+                val erro = applyEditedMessage(campo.text.toString(), "✏ Você")
+                Toast.makeText(this, erro ?: "Mensagem trocada: vale a partir do próximo grupo.", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("Cancelar", null)
+            .show()
     }
 
     /** Botão Finalizar: pede confirmação e encerra o processo em andamento, mesmo sem ter terminado. */
