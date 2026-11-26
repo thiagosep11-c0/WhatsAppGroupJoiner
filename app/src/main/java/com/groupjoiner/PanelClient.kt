@@ -30,11 +30,13 @@ object PanelClient {
     private const val K_TOKEN = "token"
     private const val K_NAME = "name"
     private const val K_LAST_RUN = "last_run"
+    // 7 = manda ao painel o resultado de cada grupo (listas salvas: Reenviar mensagem e Retentar falhas) e separa
+    //     "link inválido" de "falha" (error);
     // 6 = ler e trocar a mensagem no meio do envio (msgget/setmsg);
     // 5 = trocar o WhatsApp no meio do envio; 4 = texto como legenda da foto; 3 = foto pelo teclado do On Groups, mensagens
     // intercaladas, estado dos WhatsApp e "Verificar WhatsApp" (2 era a foto pela galeria, que não funcionou).
     // O painel só manda o que o app avisa que sabe fazer.
-    const val FEATURE_LEVEL = 6
+    const val FEATURE_LEVEL = 7
     private const val MIN_GAP_MS = 6_000L     // sinais comuns: no máximo um a cada 6 s
     private const val FORCED_GAP_MS = 1_500L  // sinais importantes (fim de rodada, app aberto): no máximo um a cada 1,5 s
 
@@ -188,6 +190,7 @@ object PanelClient {
                         RemoteControl.acksDelivered(app, built.ackIds)   // o painel já tem estas respostas
                         if (built.fullLog) wantFullLog = false
                         handleResponse(app, r.second)
+                        ListasPainel.descarregar(app)   // resultado de lista que ficou esperando conexão
                     }
                     r.first == 401 -> {
                         unpair(app)
@@ -221,6 +224,14 @@ object PanelClient {
     /** Defesa extra: nenhuma linha do registro sai daqui com link de grupo ou de outro site. */
     private fun cleanLine(s: String): String =
         s.replace(Regex("""https?://\S+"""), "[link]").replace(Regex("""chat\.whatsapp\.com/\S*"""), "[link]")
+
+    /** Resultado de cada grupo de uma fase (listas salvas no painel). Devolve o código HTTP (-1 = sem conexão). Chame fora da tela principal. */
+    fun postLista(context: Context, body: String): Int {
+        val app = context.applicationContext
+        val token = prefs(app).getString(K_TOKEN, "").orEmpty()
+        if (token.isEmpty()) return 401
+        return try { postJson(url(app) + "/api/device/lista", body, token).first } catch (e: Exception) { -1 }
+    }
 
     private fun postJson(address: String, body: String, token: String?): Pair<Int, String> {
         val c = URL(address).openConnection() as HttpURLConnection
@@ -317,7 +328,7 @@ object PanelClient {
                 JSONObject()
                     .put("ok", feitos.count { it == "joined" || it == "message_sent" || it == "already_member" })
                     .put("wait", feitos.count { it == "requested" || it == "pending" })
-                    .put("bad", feitos.count { it == "invalid" || it == "error_env" || it == "admin_only" })
+                    .put("bad", feitos.count { it == "invalid" || it == "error" || it == "error_env" || it == "admin_only" })
                     .put("skipped", feitos.count { it == "skipped_recent" })
             )
             o.put("pauseReason", snap.pauseReason)

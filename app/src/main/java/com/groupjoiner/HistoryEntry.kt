@@ -15,6 +15,7 @@ object StatusInfo {
         "left_group"     -> "🚪"
         "skipped_recent" -> "⏭"
         "error_env"      -> "⚠️"
+        "error"          -> "⚠️"
         else             -> "❌"
     }
 
@@ -28,6 +29,8 @@ object StatusInfo {
         "left_group"     -> "Saiu do grupo (admin)"
         "skipped_recent" -> "Pulado (enviado há pouco)"
         "error_env"      -> "Falha: tela/WhatsApp"
+        "error"          -> "Falha (dá para tentar de novo)"
+        "invalid"        -> "Link inválido"
         else             -> "Inválido / Erro"
     }
 }

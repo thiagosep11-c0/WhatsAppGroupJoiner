@@ -80,6 +80,11 @@ class LinkAdapter(private val items: MutableList<LinkItem>) :
                 h.tvStatus.setTextColor(Color.parseColor("#455A64"))
                 h.itemView.setBackgroundColor(Color.parseColor("#ECEFF1"))
             }
+            "error" -> {
+                h.tvStatus.text = "⚠ Falha (dá para tentar de novo)"
+                h.tvStatus.setTextColor(Color.parseColor("#E65100"))
+                h.itemView.setBackgroundColor(Color.parseColor("#FFF3E0"))
+            }
             "error_env" -> {
                 h.tvStatus.text = "⚠ Falha (tela/WhatsApp)"
                 h.tvStatus.setTextColor(Color.parseColor("#E65100"))

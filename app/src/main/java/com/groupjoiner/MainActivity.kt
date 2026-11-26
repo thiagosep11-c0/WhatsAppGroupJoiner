@@ -195,6 +195,7 @@ class MainActivity : AppCompatActivity() {
     private var screenWaits = 0
     private var pauseReason = ""
     private var runStartedAt = 0L
+    private var pendingListaCmd = ""   // Novo envio do painel que vai começar a próxima rodada (a lista fica ligada a ele)
 
     companion object {
         var instance: MainActivity? = null
@@ -493,9 +494,11 @@ class MainActivity : AppCompatActivity() {
                 .setPositiveButton("Sim") { _, _ ->
                     val links = failedLinks.map { it.second }.distinct().toMutableList()
                     failedLinks.clear()
-                    // refaz a MESMA fase em que as falhas aconteceram
-                    if (lastRunPhase == Phase.MESSAGES && lastRunMessage.isNotEmpty()) beginMessages(links, lastRunMessage)
-                    else startProcessing(links)
+                    // refaz a MESMA fase em que as falhas aconteceram (para o painel é uma lista nova)
+                    if (lastRunPhase == Phase.MESSAGES && lastRunMessage.isNotEmpty()) {
+                        ListasPainel.nova(this, "")
+                        beginMessages(links, lastRunMessage)
+                    } else startProcessing(links)
                 }.setNegativeButton("Cancelar", null).show()
         }
 
@@ -931,13 +934,19 @@ class MainActivity : AppCompatActivity() {
             switchSendMessage.isChecked = message.isNotEmpty()
             if (message.isNotEmpty()) etMessage.setText(message)
             saveSavedSettings()
-            if (!soPreencher) startProcessing()
+            if (!soPreencher) {
+                pendingListaCmd = cmd.optString("id")   // a lista desta rodada fica ligada a este Novo envio do painel
+                startProcessing()
+            }
         } else {
             editMsgLinks.setText(links.joinToString("\n"))
             etMsgOnly.setText(message)
             updateMsgLinkCount()
             saveSavedSettings()
-            if (!soPreencher) beginMessages(links, message)
+            if (!soPreencher) {
+                ListasPainel.nova(this, cmd.optString("id"))
+                beginMessages(links, message)
+            }
         }
         return null
     }
@@ -1081,6 +1090,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // painel online: rodada nova = lista nova (a fase de mensagens depois de entrar continua a mesma lista)
+        ListasPainel.nova(this, pendingListaCmd)
+        pendingListaCmd = ""
         resetListUi("Grupos (${linkList.size})")
         tvLinkCount.text = "${linkList.size} links"
         acquireScreenLock()
@@ -1337,7 +1349,7 @@ class MainActivity : AppCompatActivity() {
         val msgSent = linkItems.count { it.status == "message_sent" }
         val requested = linkItems.count { it.status == "requested" }
         val pendingC = linkItems.count { it.status == "pending" }
-        val failed = linkItems.count { it.status == "invalid" || it.status == "error_env" || it.status == "admin_only" }
+        val failed = linkItems.count { it.status == "invalid" || it.status == "error" || it.status == "error_env" || it.status == "admin_only" }
         runOnUiThread {
             tvCountdown.text = if (msgSent > 0) "💬 ${msgSent} mensagens enviadas!" else "✅ Concluido!"
             tvProgress.text = "${linkList.size}/${linkList.size}"
@@ -1351,6 +1363,8 @@ class MainActivity : AppCompatActivity() {
             val msg = etMessage.text.toString().trim()
 
             if (shouldStartPhase2 && msg.isNotEmpty()) {
+                // painel online: o resultado da ENTRADA vai para a lista (as mensagens completam a mesma lista depois)
+                ListasPainel.enviar(this, phase, selectedPackage, linkList, statusesParaPainel())
                 // Mantém tudo ativo para a fase de mensagens
                 tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
                 RunLog.add(this, "✔ ${Phase.label(phase)} concluída: $joined entraram. Iniciando MENSAGENS em 3 s")
@@ -1368,8 +1382,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Situação de cada grupo da fase, para as listas do painel: o grupo a que o celular não chegou vai como "not_done". */
+    private fun statusesParaPainel(): List<String> = linkItems.mapIndexed { i, item ->
+        val s = item.status
+        if (i >= currentIndex && (s == "pending" || s == "current" || s.isEmpty())) "not_done" else s
+    }
+
     private fun finishRun(joined: Int, waiting: Int, failed: Int, msgSent: Int) {
         val fase = phase
+        ListasPainel.enviar(this, fase, selectedPackage, linkList, statusesParaPainel())   // painel online: resultado de cada grupo
         PanelClient.setLastRun(this, runSummaryText("Concluída"))
         RunRuntime.step = ""
         runActive = false
@@ -1442,10 +1463,11 @@ class MainActivity : AppCompatActivity() {
                 // Mantém como requested na lista
                 updateLinkStatus(currentIndex, "requested")
             }
-            "invalid" -> {
+            "invalid", "error" -> {
+                // invalid = o WhatsApp disse que o link não vale mais; error = falha (dá para tentar de novo)
                 failedLinks.add(Pair(currentIndex, link))
                 HistoryManager.pendingLinks.remove(link)
-                updateLinkStatus(currentIndex, "invalid")
+                updateLinkStatus(currentIndex, status)
                 addToHistory(link, status)
             }
             "admin_only" -> {
@@ -1602,7 +1624,7 @@ class MainActivity : AppCompatActivity() {
         if (total == 0) return prefix
         val ok = linkItems.count { it.status == "joined" || it.status == "message_sent" || it.status == "already_member" }
         val wait = linkItems.count { it.status == "requested" }
-        val bad = linkItems.count { it.status == "invalid" || it.status == "error_env" || it.status == "admin_only" }
+        val bad = linkItems.count { it.status == "invalid" || it.status == "error" || it.status == "error_env" || it.status == "admin_only" }
         val skipped = linkItems.count { it.status == "skipped_recent" }
         val hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
         val okTxt = when (phase) {
@@ -1679,6 +1701,8 @@ class MainActivity : AppCompatActivity() {
      * O que já foi feito continua feito; o que faltava não é processado e nada recomeça sozinho.
      */
     private fun stopRun(reason: String) {
+        // painel online: o que foi feito até aqui vai para a lista (os grupos que faltaram vão como "não feito")
+        if ((runActive || isRunning) && !scanInProgress) ListasPainel.enviar(this, phase, selectedPackage, linkList, statusesParaPainel())
         cancelRunTimers()
         // painel online: guarda o resumo da rodada que está sendo finalizada (só se havia uma)
         if (runActive || isRunning) PanelClient.setLastRun(this, runSummaryText("Finalizada"))
@@ -1992,7 +2016,7 @@ class MainActivity : AppCompatActivity() {
         isCheckingApproval = snap.phase == Phase.APPROVAL
         failedLinks.clear()
         snap.statuses.forEachIndexed { i, s ->
-            if (s == "invalid" || s == "error_env" || s == "admin_only") failedLinks.add(Pair(i, snap.links[i]))
+            if (s == "invalid" || s == "error" || s == "error_env" || s == "admin_only") failedLinks.add(Pair(i, snap.links[i]))
         }
         RunRuntime.currentLink = linkList.getOrNull(currentIndex)
         RunRuntime.currentPkg = selectedPackage
@@ -2150,6 +2174,7 @@ class MainActivity : AppCompatActivity() {
                 selectedPackage = if (radioMsgBusiness.isChecked) "com.whatsapp.w4b" else "com.whatsapp"
                 saveSavedSettings()
                 showTab("home")
+                ListasPainel.nova(this, "")
                 beginMessages(links, msg)
             }
             .setNegativeButton("Cancelar", null)
@@ -2568,7 +2593,7 @@ class MainActivity : AppCompatActivity() {
         val requested = HistoryManager.entries.count { it.status == "requested" }
         val pending = HistoryManager.entries.count { it.status == "pending" }
         val msgs = HistoryManager.entries.count { it.status == "message_sent" }
-        val invalid = HistoryManager.entries.count { it.status == "invalid" || it.status == "error_env" }
+        val invalid = HistoryManager.entries.count { it.status == "invalid" || it.status == "error" || it.status == "error_env" }
         tvHistoryCount.text = "$total  ✅$joined  💬$msgs  ⏳$requested  🔒$pending  ❌$invalid"
     }
 

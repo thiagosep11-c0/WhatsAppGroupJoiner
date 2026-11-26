@@ -33,7 +33,7 @@ class HistoryAdapter(private val entries: List<HistoryEntry>) :
         val bgColor = when (entry.status) {
             "joined", "message_sent", "already_member" -> Color.parseColor("#E8F5E9")
             "requested", "pending", "skipped_recent" -> Color.parseColor("#E3F2FD")
-            "admin_only", "left_group", "error_env" -> Color.parseColor("#FFF3E0")
+            "admin_only", "left_group", "error_env", "error" -> Color.parseColor("#FFF3E0")
             else -> Color.parseColor("#FFEBEE")
         }
         holder.itemView.setBackgroundColor(bgColor)

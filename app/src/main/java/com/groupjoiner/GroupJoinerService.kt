@@ -166,8 +166,10 @@ class GroupJoinerService : AccessibilityService() {
 
             when (status) {
                 "not_found" -> {
+                    // a tela não mostrou nada conhecido: é FALHA (vai para o Retentar falhas do painel), não link inválido.
+                    // Link inválido de verdade é reconhecido pelo texto do WhatsApp (tryJoinGroup).
                     if (attempt < 5) scheduleCheck(2000L, attempt + 1)
-                    else safeFinish("invalid")
+                    else safeFinish("error")
                 }
                 "typing" -> {
                     // Digitação humana em andamento: os passos agendados (scheduleTyping) terminam o fluxo
@@ -299,6 +301,11 @@ class GroupJoinerService : AccessibilityService() {
             for (t in listOf("cancelar pedido", "cancel request", "withdraw request")) {
                 if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "pending"
             }
+            // Link que não vale mais (redefinido, revogado, grupo apagado): INVÁLIDO de verdade (sai das listas do painel)
+            if (telaDiz(root, frasesLinkInvalido)) {
+                RunLog.add(applicationContext, "❌ O WhatsApp diz que o link de convite não vale mais")
+                return "invalid"
+            }
             // Entrar no grupo
             for (t in listOf("entrar no grupo", "join group", "entrar", "join")) {
                 val nodes = root.findAccessibilityNodeInfosByText(t)
@@ -320,6 +327,34 @@ class GroupJoinerService : AccessibilityService() {
         } catch (e: Exception) {
             "not_found"
         }
+    }
+
+    // O que o WhatsApp escreve quando o link de convite não vale mais (sem acento e em minúsculas, como o norm() deixa)
+    private val frasesLinkInvalido = listOf(
+        "link de convite invalido", "link de convite nao e valido", "link de convite foi redefinido", "link de convite foi revogado",
+        "link de convite expirou", "link foi redefinido", "link foi revogado", "convite foi redefinido", "convite expirou",
+        "nao foi possivel entrar no grupo", "nao e possivel entrar no grupo", "nao foi possivel participar do grupo",
+        "este grupo nao existe", "grupo nao existe mais",
+        "invite link is invalid", "invite link was reset", "invite link was revoked", "invite link has expired",
+        "couldn't join this group", "couldnt join this group", "can't join this group", "cant join this group",
+        "this group no longer exists"
+    )
+
+    /** A tela atual tem algum destes textos? (compara sem acento e sem diferença de maiúsculas) */
+    private fun telaDiz(root: AccessibilityNodeInfo, frases: List<String>): Boolean {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var n = 0
+        try {
+            while (q.isNotEmpty() && n < 300) {
+                val node = q.removeFirst()
+                n++
+                val t = norm((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).replace('’', '\'')
+                if (t.isNotBlank() && frases.any { t.contains(it) }) return true
+                for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+            }
+        } catch (e: Exception) { }
+        return false
     }
 
     private fun scanForJoinButton(root: AccessibilityNodeInfo): String {
@@ -387,7 +422,7 @@ class GroupJoinerService : AccessibilityService() {
             if (messageToSend.isBlank()) {
                 safeRecycle(inputNode)
                 RunLog.add(applicationContext, "⚠ A mensagem programada está vazia: não enviei nada")
-                return "invalid"
+                return "error"
             }
             // Todo envio passa pelos mesmos passos conferidos (digita, confere o texto, toca em Enviar, confere que saiu).
             // Com a digitação humana desligada os passos são curtos e o texto vai de uma vez; antes esse caminho mandava sair do chat
@@ -488,7 +523,7 @@ class GroupJoinerService : AccessibilityService() {
         typingRunnable?.let { handler.removeCallbacks(it) }
         val step = Runnable {
             if (!isActive) return@Runnable
-            try { action() } catch (e: Exception) { safeFinish("invalid") }
+            try { action() } catch (e: Exception) { safeFinish("error") }
         }
         typingRunnable = step
         handler.postDelayed(step, delayMs)
@@ -1492,7 +1527,7 @@ class GroupJoinerService : AccessibilityService() {
             next < words.size -> scheduleTyping(dWord(words[next])) { typingWord(words, next, seguir) }
             typed.isBlank() -> {
                 RunLog.add(applicationContext, "⚠ a mensagem só tinha @todos e a marcação não foi possível: nada para enviar")
-                safeFinish("invalid")
+                safeFinish("error")
             }
             else -> scheduleTyping(dBeforeSend()) { typingSend(1) }
         }
@@ -1644,7 +1679,7 @@ class GroupJoinerService : AccessibilityService() {
             val root = rootInActiveWindow
             val pkg = root?.packageName?.toString() ?: ""
             safeRecycle(root)
-            if (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") "invalid" else "retry_env"
+            if (pkg == "com.whatsapp" || pkg == "com.whatsapp.w4b") "error" else "retry_env"
         } catch (e: Exception) { "retry_env" }
     }
 

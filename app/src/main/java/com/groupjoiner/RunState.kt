@@ -41,7 +41,7 @@ fun RunSnapshot.summaryLine(): String {
     val pos = minOf(index + 1, total)
     val ok = statuses.count { it == "joined" || it == "message_sent" || it == "already_member" }
     val wait = statuses.count { it == "requested" || it == "pending" }
-    val bad = statuses.count { it == "invalid" || it == "error_env" || it == "admin_only" }
+    val bad = statuses.count { it == "invalid" || it == "error" || it == "error_env" || it == "admin_only" }
     val base = "${Phase.label(phase)} · $pos/$total · ✅$ok ⏳$wait ❌$bad"
     return if (pauseReason.isNotEmpty()) "⚠ $pauseReason — $base" else base
 }
