@@ -293,10 +293,20 @@ class GroupJoinerService : AccessibilityService() {
 
     private fun tryJoinGroup(root: AccessibilityNodeInfo): String {
         return try {
-            // Já é membro
-            for (t in listOf("voce ja e membro", "you're already a member", "already a participant")) {
-                if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "already_member"
+            // Já é membro: o link abriu direto a CONVERSA do grupo (reenvio, ou grupo em que o celular já estava).
+            // Vem ANTES de procurar o botão Entrar: dentro da conversa, uma mensagem com "entrar" ou "pedido" seria tocada por engano.
+            if (estaNaConversa(root)) {
+                if (!RunRuntime.leftChatOk) {
+                    // pode ser a conversa do grupo ANTERIOR que ficou aberta: sai do WhatsApp e refaz este grupo do zero
+                    RunLog.add(applicationContext, "⚠ O chat anterior pode ter ficado aberto: saio do WhatsApp e refaço este grupo")
+                    return "retry_env"
+                }
+                RunLog.add(applicationContext, "👥 Já é membro: o link abriu a conversa do grupo")
+                return "already_member"
             }
+            // Já é membro (o WhatsApp avisa com uma frase; compara sem acento: "Você já é..." com acento nunca batia).
+            // Só vale sem botão de convite na tela: a descrição de um grupo pode ter uma frase parecida
+            if (telaDiz(root, frasesJaMembro) && !temBotaoConvite(root)) return "already_member"
             // Pedido já enviado
             for (t in listOf("cancelar pedido", "cancel request", "withdraw request")) {
                 if (root.findAccessibilityNodeInfosByText(t).isNotEmpty()) return "pending"
@@ -339,6 +349,69 @@ class GroupJoinerService : AccessibilityService() {
         "couldn't join this group", "couldnt join this group", "can't join this group", "cant join this group",
         "this group no longer exists"
     )
+
+    // O que o WhatsApp escreve quando o celular já está no grupo (sem acento e em minúsculas, como o norm() deixa)
+    private val frasesJaMembro = listOf(
+        "voce ja e membro", "voce ja e participante", "ja e participante deste grupo",
+        "you're already a member", "you are already a member", "already a participant", "you're already in this group"
+    )
+
+    // Botões da tela de convite, comparados pelo rótulo INTEIRO (uma mensagem da conversa com "entrar" no meio não conta)
+    private val botoesConvite = setOf(
+        "entrar no grupo", "participar do grupo", "join group", "enviar pedido", "pedir para entrar", "solicitar entrada",
+        "send request", "request to join"
+    )
+
+    /** A tela tem o botão Entrar no grupo / Enviar pedido? (= é a tela de convite, o celular ainda não está no grupo) */
+    private fun temBotaoConvite(root: AccessibilityNodeInfo): Boolean {
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var n = 0
+        try {
+            while (q.isNotEmpty() && n < 500) {
+                val node = q.removeFirst()
+                n++
+                if (norm(node.text?.toString() ?: "").trim() in botoesConvite ||
+                    norm(node.contentDescription?.toString() ?: "").trim() in botoesConvite
+                ) return true
+                for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+            }
+        } catch (e: Exception) { }
+        return false
+    }
+
+    /**
+     * A tela é a CONVERSA de um grupo (o celular já é membro)? O campo de digitar da conversa (id "entry", ligado) basta.
+     * Os outros sinais (campo com a dica "Mensagem"/"Message", cabeçalho da conversa com ids "conversation_contact...",
+     * campo de digitar desligado embaixo = grupo em que só os admins escrevem) só valem se a tela NÃO tiver botão de convite.
+     */
+    private fun estaNaConversa(root: AccessibilityNodeInfo): Boolean {
+        var sinal = false
+        val altura = resources.displayMetrics.heightPixels
+        val b = Rect()
+        val q = ArrayDeque<AccessibilityNodeInfo>()
+        q.add(root)
+        var n = 0
+        try {
+            while (q.isNotEmpty() && n < 500) {
+                val node = q.removeFirst()
+                n++
+                val id = node.viewIdResourceName ?: ""
+                if (id.endsWith("/entry") && node.isEnabled) return true
+                if (id.endsWith("/conversation_contact") || id.endsWith("/conversation_contact_name") || id.endsWith("/conversation_contact_status")) {
+                    sinal = true
+                }
+                if (id.endsWith("/entry") || node.className?.toString()?.contains("EditText") == true) {
+                    node.getBoundsInScreen(b)
+                    val dica = if (Build.VERSION.SDK_INT >= 26) (node.hintText?.toString() ?: "") else ""
+                    val rotulo = norm((node.contentDescription?.toString() ?: "") + " " + dica)
+                    if (rotulo.contains("mensagem") || rotulo.contains("message") || (!node.isEnabled && b.top > altura * 0.6)) sinal = true
+                }
+                for (i in 0 until node.childCount) node.getChild(i)?.let { q.add(it) }
+            }
+        } catch (e: Exception) { }
+        return sinal && !temBotaoConvite(root)
+    }
 
     /** A tela atual tem algum destes textos? (compara sem acento e sem diferença de maiúsculas) */
     private fun telaDiz(root: AccessibilityNodeInfo, frases: List<String>): Boolean {

@@ -30,13 +30,15 @@ object PanelClient {
     private const val K_TOKEN = "token"
     private const val K_NAME = "name"
     private const val K_LAST_RUN = "last_run"
+    // 8 = reenvio funciona: na entrada, o link que abre direto a conversa do grupo vira "já é membro" (antes virava falha)
+    //     e a fase de mensagens manda também nesses grupos;
     // 7 = manda ao painel o resultado de cada grupo (listas salvas: Reenviar mensagem e Retentar falhas) e separa
     //     "link inválido" de "falha" (error);
     // 6 = ler e trocar a mensagem no meio do envio (msgget/setmsg);
     // 5 = trocar o WhatsApp no meio do envio; 4 = texto como legenda da foto; 3 = foto pelo teclado do On Groups, mensagens
     // intercaladas, estado dos WhatsApp e "Verificar WhatsApp" (2 era a foto pela galeria, que não funcionou).
     // O painel só manda o que o app avisa que sabe fazer.
-    const val FEATURE_LEVEL = 7
+    const val FEATURE_LEVEL = 8
     private const val MIN_GAP_MS = 6_000L     // sinais comuns: no máximo um a cada 6 s
     private const val FORCED_GAP_MS = 1_500L  // sinais importantes (fim de rodada, app aberto): no máximo um a cada 1,5 s
 

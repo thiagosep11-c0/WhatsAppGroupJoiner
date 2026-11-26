@@ -1346,6 +1346,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun finishOrChain() {
         val joined = linkItems.count { it.status == "joined" }
+        // a mensagem vai nos grupos em que entrou E nos que já era membro (reenvio: o link abre direto a conversa)
+        val jaMembro = linkItems.count { it.status == "already_member" }
         val msgSent = linkItems.count { it.status == "message_sent" }
         val requested = linkItems.count { it.status == "requested" }
         val pendingC = linkItems.count { it.status == "pending" }
@@ -1358,8 +1360,8 @@ class MainActivity : AppCompatActivity() {
             btnPause.visibility = View.GONE
             if (failedLinks.isNotEmpty()) btnRetry.visibility = View.VISIBLE
 
-            // Depois de ENTRAR (ou de verificar aprovados), manda a mensagem nos grupos em que entrou
-            val shouldStartPhase2 = phase != Phase.MESSAGES && switchSendMessage.isChecked && !isPhase2 && joined > 0
+            // Depois de ENTRAR (ou de verificar aprovados), manda a mensagem nos grupos em que entrou e nos que já era membro
+            val shouldStartPhase2 = phase != Phase.MESSAGES && switchSendMessage.isChecked && !isPhase2 && joined + jaMembro > 0
             val msg = etMessage.text.toString().trim()
 
             if (shouldStartPhase2 && msg.isNotEmpty()) {
@@ -1367,7 +1369,11 @@ class MainActivity : AppCompatActivity() {
                 ListasPainel.enviar(this, phase, selectedPackage, linkList, statusesParaPainel())
                 // Mantém tudo ativo para a fase de mensagens
                 tvCountdown.text = "💬 Iniciando envio de mensagens em 3s..."
-                RunLog.add(this, "✔ ${Phase.label(phase)} concluída: $joined entraram. Iniciando MENSAGENS em 3 s")
+                RunLog.add(
+                    this,
+                    "✔ ${Phase.label(phase)} concluída: $joined entraram" + (if (jaMembro > 0) ", $jaMembro já eram membros" else "") +
+                        ". Iniciando MENSAGENS em 3 s"
+                )
                 isRunning = true
                 persistRun("WAIT", 60_000L)
                 chainRunnable?.let { handler.removeCallbacks(it) }
@@ -1498,7 +1504,8 @@ class MainActivity : AppCompatActivity() {
             "${StatusInfo.icon(status)} ${Phase.label(phase)} ${currentIndex + 1}/${linkList.size}: ${StatusInfo.text(status)}" +
                 (if (marcacao.isNotEmpty()) " · $marcacao" else "")
         )
-        scheduleNext()
+        // já era membro (não entrou em nada): não precisa da pausa longa da entrada; segue em 5 s
+        if (status == "already_member" && !isPhase2) scheduleNext(pausaMs = 5_000L) else scheduleNext()
     }
 
     /** Falha por causa do ambiente: tenta o mesmo grupo de novo (até MAX_ATTEMPTS); depois marca e segue. */
@@ -1533,10 +1540,11 @@ class MainActivity : AppCompatActivity() {
         scheduleNext()
     }
 
-    private fun scheduleNext(skipped: Boolean = false) {
+    private fun scheduleNext(skipped: Boolean = false, pausaMs: Long? = null) {
         // Entrar nos grupos: ciclo fixo 5/30/40/50/60 s. Mensagens: pausa menor e aleatória (Config)
         val delay = when {
             skipped -> 800L
+            pausaMs != null -> pausaMs
             isPhase2 -> HumanTyping.pauseBetweenGroupsMs(readPauseMin(), readPauseMax())
             else -> defaultIntervals[currentIndex % defaultIntervals.size]
         }
@@ -2129,9 +2137,9 @@ class MainActivity : AppCompatActivity() {
     // Fase de mensagens
     // =====================================================================
 
-    /** Depois de entrar nos grupos: manda a mensagem só nos grupos em que entrou. */
+    /** Depois de entrar nos grupos: manda a mensagem nos grupos em que entrou e nos que já era membro (reenvio). */
     private fun startPhase2(message: String) {
-        val links = linkItems.filter { it.status == "joined" }.map { it.url }
+        val links = linkItems.filter { it.status == "joined" || it.status == "already_member" }.map { it.url }
         if (links.isEmpty()) {
             finishRun(0, 0, 0, 0)
             return
